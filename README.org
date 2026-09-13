@@ -1,0 +1,13 @@
+#+title: Guile OpenAPI
+#+author: Josep Bigorra
+#+email: jjbigorra@gmail.com
+#+language: en
+
+[[./dist/scheme-guile.svg]]  [[./dist/gnu-guix.svg]]   [[./dist/license-agpl3+.svg]]  [[./dist/license-fdl13+.svg]]
+[[./dist/jointhefreeworld-org.svg]] [[./dist/maak.svg]]
+
+/OpenAPI parser, converter, code generator for Lisp (Guile Scheme)/
+
+If you like my work, please support me by [[https://bmc.link/jjbigorra][buying me a cup of coffee ☕]] so I can continue with a lot of motivation.
+
+---------------
