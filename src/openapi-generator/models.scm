@@ -49,6 +49,21 @@
 ;; - *Enumerations are values, not types.*  A string enumeration is a list of
 ;;   strings, a predicate and one constant per value, which composes with Scheme
 ;;   better than a wrapper type would.
+;;
+;; Everything below is built as data.  A procedure named @code{...-form} returns
+;; the form of one generated definition -- a list of symbols, strings, numbers and
+;; keywords -- and a procedure named @code{...-forms} returns the forms of a
+;; whole schema, in the order they are written.  @code{emit-models} puts them in a
+;; list and renders that list once with @code{forms->string}, so this file reads
+;; like the code it writes and the layout of the output is decided in exactly one
+;; place.  Only two things stay strings: a docstring and a comment, because they
+;; are prose, not code.
+;;
+;; The expression helpers are shared with the other generators and so are part of
+;; this module's interface: @code{unbox-expression} returns the form that decodes
+;; a jso value, @code{box-expression} the form that encodes one, and both take
+;; their subject as a form as well -- @code{'element}, @code{'(cdr entry)} -- so
+;; that a caller can nest them without rendering anything.
 
 (define-module (openapi-generator models)
   #:declarative? #t
@@ -61,7 +76,10 @@
   #:use-module (openapi-generator naming)
   #:use-module (openapi-generator spec)
   #:use-module (openapi-generator schema)
-  #:use-module (openapi-generator emitter)
+  #:use-module ((openapi-generator code) #:select (forms->string
+                                                   comment
+                                                   blank
+                                                   quoted))
   #:use-module (openapi-generator config)
   #:export (emit-models
             make-context
@@ -122,6 +140,76 @@
   (or (shape-name shape) "value"))
 
 ;;; Commentary:
+;;; Names of generated procedures
+;;
+;; A schema is emitted as a bundle of definitions named after it: the record type
+;; @code{<pet>}, the predicate @code{pet?}, the constructor @code{make-pet} and
+;; its unchecked twin @code{%make-pet}, the accessors @code{pet-name}, the
+;; converters @code{pet->jso} and @code{jso->pet}, the validator
+;; @code{validate-pet} and the merge patch @code{pet-apply-patch}.  They are built
+;; as symbols in one place, so that a definition and the form that refers to it
+;; cannot drift apart, and so that no emitter has to spell a name by gluing text.
+
+(define (name-symbol name)
+  "Return @var{name} as a symbol.
+
+A name reaches these procedures in either of two shapes: as the identifier string
+the naming module returns, or as the symbol a form already holds.  Both have to
+become a symbol, because that is what @code{symbol-append} concatenates."
+  (if (symbol? name) name (string->symbol name)))
+
+(define (type-symbol name)
+  "Return the record type of the schema called @var{name}, e.g. @code{<pet>}."
+  (symbol-append '< (name-symbol name) '>))
+
+(define (predicate-symbol name)
+  "Return the predicate of the schema called @var{name}, e.g. @code{pet?}."
+  (symbol-append (name-symbol name) '?))
+
+(define (constructor-symbol name)
+  "Return the validating constructor of @var{name}, e.g. @code{make-pet}."
+  (symbol-append 'make- (name-symbol name)))
+
+(define (raw-constructor-symbol name)
+  "Return the unchecked constructor of @var{name}, e.g. @code{%make-pet}."
+  (symbol-append '%make- (name-symbol name)))
+
+(define (accessor-symbol name field)
+  "Return the accessor of @var{field} on the record of @var{name}."
+  (symbol-append (name-symbol name) '- (name-symbol field)))
+
+(define (encoder-symbol name)
+  "Return the procedure that encodes a @var{name} as a jso value."
+  (symbol-append (name-symbol name) '->jso))
+
+(define (decoder-symbol name)
+  "Return the procedure that decodes a jso value into a @var{name}."
+  (symbol-append 'jso-> (name-symbol name)))
+
+(define (validator-symbol name)
+  "Return the procedure that validates a @var{name}."
+  (symbol-append 'validate- (name-symbol name)))
+
+(define (valid-predicate-symbol name)
+  "Return the predicate that says whether a @var{name} is valid."
+  (symbol-append (name-symbol name) '-valid?))
+
+(define (patch-symbol name)
+  "Return the merge patch procedure of @var{name}, e.g. @code{pet-apply-patch}."
+  (symbol-append (name-symbol name) '-apply-patch))
+
+(define (values-symbol name)
+  "Return the binding that holds the allowed values of an enumeration."
+  (symbol-append (name-symbol name) '-values))
+
+(define (constant-symbol symbol value)
+  "Return the constant naming @var{value} in the enumeration @var{symbol}.
+
+The whole name is made an identifier at once, so a value that would start with a
+digit still produces the constant the export list advertises."
+  (string->symbol (identifier (format #f "~a-~a" symbol value))))
+
+;;; Commentary:
 ;;; Describing shapes in generated code
 
 (define (schema-promoted-type shape)
@@ -133,20 +221,24 @@
     (else 'any)))
 
 (define (schema-predicate ctx shape)
-  "Return the source text of a predicate that recognises @var{shape}."
+  "Return the form of a predicate that recognises @var{shape}.
+
+A named shape is recognised by the predicate generated for it; a scalar by the
+procedure that tests its type; anything else by a lambda, which is the one case
+where nothing more specific can be said about the value."
   (case (shape-kind shape)
     ((record enum union)
-     (format #f "~a?" (identifier (component-name shape))))
+     (predicate-symbol (identifier (component-name shape))))
     ((scalar)
      (case (or (shape-type shape) 'string)
-       ((string) "string?")
-       ((integer) "integer?")
-       ((number) "number?")
-       ((boolean) "boolean?")
-       (else "(lambda (value) #t)")))
-    ((list) "list?")
-    ((map) "(lambda (value) (and (list? value) (every pair? value)))")
-    (else "(lambda (value) #t)")))
+       ((string) 'string?)
+       ((integer) 'integer?)
+       ((number) 'number?)
+       ((boolean) 'boolean?)
+       (else '(lambda (value) #t))))
+    ((list) 'list?)
+    ((map) '(lambda (value) (and (list? value) (every pair? value))))
+    (else '(lambda (value) #t))))
 
 (define (schema-display-name shape)
   "Return a human readable name for @var{shape}, for error messages."
@@ -165,64 +257,69 @@
   (or (hash-ref (context-required ctx) name) '()))
 
 (define (union-branch-test ctx shape variable)
-  "Return a test that tells whether a jso node matches @var{shape}."
+  "Return the form of a test that tells whether a jso node matches @var{shape}."
   (case (shape-kind shape)
     ((record)
      (let ((required (context-required-properties ctx (component-name shape))))
        (if (null? required)
-           (format #f "(jso-object? ~a)" variable)
-           (format #f "(and (jso-object? ~a)~{~a~})"
-                   variable
-                   (map (lambda (property)
-                          (format #f " (jso-has? ~a ~s)" variable property))
+           `(jso-object? ,variable)
+           `(and (jso-object? ,variable)
+                 ,@(map (lambda (property)
+                          `(jso-has? ,variable ,property))
                         required)))))
-    ((list) (format #f "(vector? ~a)" variable))
-    ((map union) (format #f "(jso-object? ~a)" variable))
+    ((list) `(vector? ,variable))
+    ((map union) `(jso-object? ,variable))
     ((scalar enum)
      (case (or (shape-type shape) 'string)
-       ((string) (format #f "(string? ~a)" variable))
-       ((integer) (format #f "(integer? ~a)" variable))
-       ((number) (format #f "(number? ~a)" variable))
-       ((boolean) (format #f "(boolean? ~a)" variable))
-       (else "#t")))
-    (else (format #f "(jso-object? ~a)" variable))))
+       ((string) `(string? ,variable))
+       ((integer) `(integer? ,variable))
+       ((number) `(number? ,variable))
+       ((boolean) `(boolean? ,variable))
+       (else #t)))
+    (else `(jso-object? ,variable))))
 
 ;;; Commentary:
 ;;; Conversion, in both directions
 
 (define (converter-to shape)
-  "Return the name of the procedure that decodes a jso into @var{shape}."
-  (format #f "jso->~a" (identifier (component-name shape))))
+  "Return the symbol of the procedure that decodes a jso into @var{shape}."
+  (decoder-symbol (identifier (component-name shape))))
 
 (define (converter-from shape)
-  "Return the name of the procedure that encodes @var{shape} as a jso value."
-  (format #f "~a->jso" (identifier (component-name shape))))
+  "Return the symbol of the procedure that encodes @var{shape} as a jso value."
+  (encoder-symbol (identifier (component-name shape))))
 
 (define* (unbox-expression ctx shape expression)
-  "Return source that converts the jso @var{expression} into @var{shape}."
+  "Return the form that converts the jso @var{expression} into @var{shape}.
+
+@var{expression} is itself a form -- @code{'node}, @code{'(cdr entry)} -- so a
+caller can hand in the place the jso value is read from without rendering it
+first.  A list and a map bind that place to @code{value} and decode each item,
+because the null check happens once for the collection rather than once per
+member."
   (case (shape-kind shape)
     ((union)
      (union-unbox ctx shape expression))
     ((record enum)
-     (format #f "(~a ~a)" (converter-to shape) expression))
+     (list (converter-to shape) expression))
     ((list)
-     (format #f
-             (string-append
-              "(let ((value ~a))"
-              " (if (or (eq? value #f) (json-null? value)) #f"
-              " (map (lambda (element) ~a) (jso-array->list value))))")
-             expression
-             (unbox-expression ctx (shape-items shape) "element")))
+     `(let ((value ,expression))
+        (if (or (eq? value #f) (json-null? value))
+            #f
+            (map (lambda (element)
+                   ,(unbox-expression ctx (shape-items shape) 'element))
+                 (jso-array->list value)))))
     ((map)
-     (format #f
-             (string-append
-              "(let ((value ~a))"
-              " (if (or (eq? value #f) (json-null? value)) #f"
-              " (map (lambda (entry) (cons (car entry) ~a)) value)))")
-             expression
-             (unbox-expression ctx (shape-items shape) "(cdr entry)")))
+     `(let ((value ,expression))
+        (if (or (eq? value #f) (json-null? value))
+            #f
+            (map (lambda (entry)
+                   (cons (car entry)
+                         ,(unbox-expression ctx (shape-items shape) '(cdr entry))))
+                 value))))
     ((scalar)
-     (format #f "(let ((value ~a)) (if (json-null? value) #f value))" expression))
+     `(let ((value ,expression))
+        (if (json-null? value) #f value)))
     (else expression)))
 
 (define (find-branch shape name)
@@ -233,120 +330,117 @@
         (shape-branches shape)))
 
 (define (union-unbox ctx shape expression)
-  "Return source that decodes @var{expression} as a union.
+  "Return the form that decodes @var{expression} as a union.
 
 A discriminated union dispatches on its discriminator property, which is exact;
 an undiscriminated one tries the branch tests in declaration order."
   (let ((discriminator (shape-discriminator shape))
         (branches (shape-branches shape))
         (values (shape-discriminator-values shape)))
-    (cond
-      ((and discriminator (pair? values))
-       (format #f
-               "(cond~{ ~a~} (else (error \"no discriminator value in the value:\" ~a)))"
-               (map (lambda (entry)
-                      (let ((branch (find-branch shape (cdr entry))))
-                        (if branch
-                            (format #f "((string=? (jso-ref ~a ~s) ~s) (~a ~a))"
-                                    expression
-                                    discriminator
-                                    (car entry)
-                                    (converter-to branch)
-                                    expression)
-                            (format #f "#f"))))
-                    values)
-               expression))
-      (else
-       (format #f
-               "(cond~{ ~a~} (else (error \"no union member matches\" ~a)))"
-               (map (lambda (branch)
-                      (format #f "~a ~a"
-                              (union-branch-test ctx branch expression)
-                              (unbox-expression ctx branch expression)))
-                    branches)
-               expression)))))
+    (if (and discriminator (pair? values))
+        `(cond
+          ,@(map (lambda (entry)
+                   (let ((branch (find-branch shape (cdr entry))))
+                     (if branch
+                         (list (list 'string=?
+                                     (list 'jso-ref expression discriminator)
+                                     (car entry))
+                               (list (converter-to branch) expression))
+                         ;; A mapping entry that names no branch keeps the literal
+                         ;; #f this generator has always written for it, rather
+                         ;; than silently changing what a specification decodes to.
+                         #f)))
+                 values)
+          (else (error "no discriminator value in the value:" ,expression)))
+        `(cond
+          ,@(map (lambda (branch)
+                   (list (union-branch-test ctx branch expression)
+                         (unbox-expression ctx branch expression)))
+                 branches)
+          (else (error "no union member matches" ,expression))))))
 
 (define* (box-expression ctx shape expression #:optional (optional? #f))
-  "Return source that converts the Scheme @var{expression} into a jso value.
+  "Return the form that converts the Scheme @var{expression} into a jso value.
 
 When @var{optional?} is true, @code{#f} becomes @code{json-null}, which is how an
-absent member is written."
+absent member is written.  A union is encoded by testing its branches in the same
+order the predicate and the decoder use, so the three agree on which member a
+value belongs to."
   (let ((encoded
          (case (shape-kind shape)
            ((union)
-            (format #f "(cond ~{~a~} (else (validation-failure '(\"union\") \"value matches no member of the union\")))"
-                    (map (lambda (branch)
-                           (format #f "((~a) ~a)"
-                                   (schema-predicate ctx branch)
-                                   (box-expression ctx branch expression)))
-                         (shape-branches shape))))
+            `(cond
+              ,@(map (lambda (branch)
+                       (list (list (schema-predicate ctx branch) expression)
+                             (box-expression ctx branch expression)))
+                     (shape-branches shape))
+              (else (validation-failure
+                     ,(quoted (list "union"))
+                     "value matches no member of the union"))))
            ((record enum)
-            (format #f "(~a ~a)" (converter-from shape) expression))
+            (list (converter-from shape) expression))
            ((list)
-            (format #f "(list->vector (map (lambda (element) ~a) ~a))"
-                    (box-expression ctx (shape-items shape) "element")
-                    expression))
+            `(list->vector
+              (map (lambda (element)
+                     ,(box-expression ctx (shape-items shape) 'element))
+                   ,expression)))
            ((map)
-            (format #f "(map (lambda (entry) (cons (car entry) ~a)) ~a)"
-                    (box-expression ctx (shape-items shape) "(cdr entry)")
-                    expression))
+            `(map (lambda (entry)
+                    (cons (car entry)
+                          ,(box-expression ctx (shape-items shape) '(cdr entry))))
+                  ,expression))
            (else expression))))
     (if optional?
-        (format #f "(if (eq? ~a #f) json-null ~a)" expression encoded)
+        `(if (eq? ,expression #f) json-null ,encoded)
         encoded)))
 
 ;;; Commentary:
 ;;; Validation
 
 (define (schema-checks ctx shape path expression)
-  "Return the validation lines for one value of @var{shape}.
+  "Return the validation forms for one value of @var{shape}.
 
-The lines assume the value is present: absence is the caller's business, since
-only the caller knows whether the field is required."
+@var{path} is the form that names the value in a message, a quoted list such as
+@code{'(\"pet\" \"name\")}, and @var{expression} the form that reads it.  The forms
+assume the value is present: absence is the caller's business, since only the
+caller knows whether the field is required."
   (let ((document (context-document ctx)))
     (append
      (case (shape-kind shape)
        ((record)
-        (list (format #f "(check-predicate ~a ~a ~a ~s)"
-                      path
-                      expression
-                      (schema-predicate ctx shape)
-                      (schema-display-name shape))))
+        (list `(check-predicate ,path
+                                ,expression
+                                ,(schema-predicate ctx shape)
+                                ,(schema-display-name shape))))
        ((enum)
-        (list (format #f "(check-type ~a ~a '~a)"
-                      path expression (schema-promoted-type shape))
-              (format #f "(check-enum ~a ~a ~a)"
-                      path expression (enum-values-expression shape))))
+        (list `(check-type ,path ,expression ',(schema-promoted-type shape))
+              `(check-enum ,path ,expression ,(enum-values-expression shape))))
        ((list)
         (append
-         (list (format #f "(check-type ~a ~a 'list)" path expression))
+         (list `(check-type ,path ,expression 'list))
          (if (any-shape? (shape-items shape))
              '()
-             (list (format #f "(check-list ~a ~a ~a ~s)"
-                           path
-                           expression
-                           (schema-predicate ctx (shape-items shape))
-                           (schema-display-name (shape-items shape)))))
-         (list (format #f "(check-unique-items ~a ~a)" path expression))))
+             (list `(check-list ,path
+                                ,expression
+                                ,(schema-predicate ctx (shape-items shape))
+                                ,(schema-display-name (shape-items shape)))))
+         (list `(check-unique-items ,path ,expression))))
        ((map)
         (append
-         (list (format #f "(check-type ~a ~a 'map)" path expression))
+         (list `(check-type ,path ,expression 'map))
          (if (any-shape? (shape-items shape))
              '()
-             (list (format #f "(check-map ~a ~a ~a ~s)"
-                           path
-                           expression
-                           (schema-predicate ctx (shape-items shape))
-                           (schema-display-name (shape-items shape)))))))
+             (list `(check-map ,path
+                               ,expression
+                               ,(schema-predicate ctx (shape-items shape))
+                               ,(schema-display-name (shape-items shape)))))))
        ((union)
-        (list (format #f "(check-predicate ~a ~a ~a ~s)"
-                      path
-                      expression
-                      (schema-predicate ctx shape)
-                      (schema-display-name shape))))
+        (list `(check-predicate ,path
+                                ,expression
+                                ,(schema-predicate ctx shape)
+                                ,(schema-display-name shape))))
        (else
-        (list (format #f "(check-type ~a ~a '~a)"
-                      path expression (schema-promoted-type shape)))))
+        (list `(check-type ,path ,expression ',(schema-promoted-type shape)))))
      (string-constraints document shape path expression)
      (number-constraints document shape path expression)
      (list-constraints document shape path expression))))
@@ -360,22 +454,18 @@ only the caller knows whether the field is required."
               (format-name (shape-format shape)))
           (append
            (if minimum
-               (list (format #f "(check-min-length ~a ~a ~a)"
-                             path expression minimum))
+               (list `(check-min-length ,path ,expression ,minimum))
                '())
            (if maximum
-               (list (format #f "(check-max-length ~a ~a ~a)"
-                             path expression maximum))
+               (list `(check-max-length ,path ,expression ,maximum))
                '())
            (if (and pattern (not (string=? pattern "^.*$")))
-               (list (format #f "(check-pattern ~a ~a ~s)"
-                             path expression pattern))
+               (list `(check-pattern ,path ,expression ,pattern))
                '())
            (if (and format-name
                     (memq (string->symbol format-name)
                           '(date date-time time uuid email hostname ipv4 uri)))
-               (list (format #f "(check-format ~a ~a '~a)"
-                             path expression (string->symbol format-name)))
+               (list `(check-format ,path ,expression ',(string->symbol format-name)))
                '())))
         '())))
 
@@ -390,22 +480,19 @@ only the caller knows whether the field is required."
               (multiple (schema-multiple-of document schema)))
           (append
            (if minimum
-               (list (format #f "(check-minimum ~a ~a ~a)" path expression minimum))
+               (list `(check-minimum ,path ,expression ,minimum))
                '())
            (if maximum
-               (list (format #f "(check-maximum ~a ~a ~a)" path expression maximum))
+               (list `(check-maximum ,path ,expression ,maximum))
                '())
            (if (number? exclusive-minimum)
-               (list (format #f "(check-exclusive-minimum ~a ~a ~a)"
-                             path expression exclusive-minimum))
+               (list `(check-exclusive-minimum ,path ,expression ,exclusive-minimum))
                '())
            (if (number? exclusive-maximum)
-               (list (format #f "(check-exclusive-maximum ~a ~a ~a)"
-                             path expression exclusive-maximum))
+               (list `(check-exclusive-maximum ,path ,expression ,exclusive-maximum))
                '())
            (if multiple
-               (list (format #f "(check-multiple-of ~a ~a ~a)"
-                             path expression multiple))
+               (list `(check-multiple-of ,path ,expression ,multiple))
                '())))
         '())))
 
@@ -416,12 +503,10 @@ only the caller knows whether the field is required."
               (maximum (schema-max-items document schema)))
           (append
            (if minimum
-               (list (format #f "(check-min-items ~a ~a ~a)"
-                             path expression minimum))
+               (list `(check-min-items ,path ,expression ,minimum))
                '())
            (if maximum
-               (list (format #f "(check-max-items ~a ~a ~a)"
-                             path expression maximum))
+               (list `(check-max-items ,path ,expression ,maximum))
                '())))
         '())))
 
@@ -429,36 +514,40 @@ only the caller knows whether the field is required."
 ;;; Enumerations
 
 (define (enum-values-expression shape)
-  "Return the source of the list of allowed values of an enumeration."
-  (if (shape-name shape)
-      (format #f "~a-values" (identifier (shape-name shape)))
-      (format #f "'~s" (shape-values shape))))
+  "Return the form that refers to the list of allowed values of an enumeration.
 
-(define (emit-enumeration ctx shape base title)
-  "Emit the list of values, one constant per value and the predicate."
-  (emit-wrapped (format #f "(define ~a-values (list" base)
-                (map (lambda (value) (format #f "~s" value))
-                     (shape-values shape))
-                "))")
-  (emit-blank)
-  (for-each (lambda (value)
-              (emit "(define ~a ~s)"
-                    (identifier (format #f "~a-~a" base value))
-                    value))
-            (shape-values shape))
-  (emit-blank)
-  (emit "(define (~a? value)" (identifier base))
-  (with-indent
-   (lambda ()
-     (emit-docstring
-      (format #f "Return #t when VALUE is one of the ~a values." title))
-     (emit "(and (~a? value) (if (member value ~a-values) #t #f))"
-           (case (or (shape-type shape) 'string)
-             ((integer) "integer")
-             ((number) "number")
-             (else "string"))
-           base)))
-  (emit-close))
+A named enumeration binds its values, so the check reads that binding; an inline
+one is spelled out, because there is nothing to refer to."
+  (if (shape-name shape)
+      (values-symbol (identifier (shape-name shape)))
+      (quoted (shape-values shape))))
+
+(define (enumeration-forms ctx shape base title)
+  "Return the forms of an enumeration, in the order they are written.
+
+An enumeration is the list of allowed values, one constant per value and a
+predicate that holds for exactly those values.  @var{base} is the name the
+enumeration is published under -- @code{pet-status} for the @code{status} property
+of @code{Pet} -- so the constants read @code{pet-status-available} and a caller
+that passes a typo gets a reader error rather than a validation error."
+  (let* ((symbol (identifier base))
+         (values (values-symbol symbol))
+         (type (case (or (shape-type shape) 'string)
+                 ((integer) 'integer)
+                 ((number) 'number)
+                 (else 'string))))
+    (append
+     (list `(define ,values
+              (list ,@(shape-values shape))))
+     (map (lambda (value)
+            `(define ,(constant-symbol symbol value)
+               ,value))
+          (shape-values shape))
+     (list
+      `(define (,(predicate-symbol symbol) value)
+         ,(format #f "Return #t when VALUE is one of the ~a values." title)
+         (and (,(predicate-symbol type) value)
+              (if (member value ,values) #t #f)))))))
 
 ;;; Commentary:
 ;;; Records
@@ -472,18 +561,21 @@ only the caller knows whether the field is required."
          additional)))
 
 (define (jso-literal value)
-  "Return Scheme source for @var{value}, a jso value used as a default."
+  "Return @var{value}, a jso value used as a default, as a form.
+
+A string is handed to the renderer as the string it is: the renderer knows how to
+write a literal, escaping included, so there is no reason to quote anything here."
   (cond
-    ((json-null? value) "#f")
-    ((string? value) (scheme-string value))
-    ((boolean? value) (if value "#t" "#f"))
-    ((number? value) (format #f "~a" value))
+    ((json-null? value) #f)
+    ((string? value) value)
+    ((boolean? value) value)
+    ((number? value) value)
     ((vector? value)
-     (format #f "(list ~{~a~^ ~})" (map jso-literal (vector->list value))))
-    (else "#f")))
+     `(list ,@(map jso-literal (vector->list value))))
+    (else #f)))
 
 (define (field-default ctx property)
-  "Return the source of the constructor default of @var{property}.
+  "Return the form of the constructor default of @var{property}.
 
 An optional collection defaults to the empty collection, which is what a caller
 expects, unless the specification gives it a minimum size: then the default is
@@ -495,16 +587,16 @@ record is built."
          (document (context-document ctx)))
     (cond
       ((property-required? property)
-       "#f")
+       #f)
       ((and declared (not (json-null? declared)) (not (vector? declared)))
        (jso-literal declared))
       ((and (list-shape? shape)
             (not (schema-min-items document schema)))
-       "'()")
+       (quoted '()))
       ((and (map-shape? shape)
             (not (schema-min-properties document schema)))
-       "'()")
-      (else "#f"))))
+       (quoted '()))
+      (else #f))))
 
 (define (shape-renamed shape name)
   "Return @var{shape} with @var{name} as its name."
@@ -525,238 +617,220 @@ record is built."
   "Return the properties of @var{shape}, with its inline enumerations named."
   (name-property-enums ctx symbol (shape-properties shape)))
 
-(define (emit-record-type ctx shape name)
-  "Emit only the @code{define-record-type} form of @var{shape}.
+(define (record-field-names fields)
+  "Return the identifiers of @var{fields}, the names the record binds.
+
+The binding is a variable, so it is a symbol; the name of the member in the jso
+object stays a string, because that is what the object is read and written with."
+  (map (lambda (property)
+         (string->symbol (identifier (property-name property))))
+       fields))
+
+(define (record-type-form ctx shape name)
+  "Return the @code{define-record-type} form of @var{shape}.
 
 Record types are emitted before anything that refers to their predicate: a
 reference to a record predicate written above its @code{define-record-type} is
 compiled as a reference to the @code{define-record-type} syntax itself, which is
 a syntax transformer rather than a procedure."
   (let* ((symbol (identifier name))
-         (predicate (format #f "~a?" symbol))
-         (raw-constructor (string-append "%make-" symbol))
          (fields (record-fields ctx symbol shape))
-         (field-names (map (lambda (property)
-                             (identifier (property-name property)))
-                           fields))
+         (field-names (record-field-names fields))
          (extra-schema (record-extra-schema shape))
          (all-fields (if extra-schema
-                         (append field-names '("extra"))
+                         (append field-names '(extra))
                          field-names)))
-    (emit "(define-record-type <~a>" symbol)
-    (with-indent
-     (lambda ()
-       (emit "(~a~{ ~a~})" raw-constructor all-fields)
-       (emit "~a" predicate)
-       (for-each (lambda (field)
-                   (emit "(~a ~a-~a)" field symbol field))
-                 field-names)
-       (when extra-schema
-         (emit "(extra ~a-extra)" symbol))))
-    (emit-close)
-    (emit-blank)))
+    `(define-record-type ,(type-symbol symbol)
+       (,(raw-constructor-symbol symbol) ,@all-fields)
+       ,(predicate-symbol symbol)
+       ,@(map (lambda (field)
+                (list field (accessor-symbol symbol field)))
+              field-names)
+       ,@(if extra-schema
+             (list (list 'extra (accessor-symbol symbol 'extra)))
+             '()))))
 
-(define (emit-record ctx shape name)
-  "Emit the constructor, validator and converters of the record @var{name}."
-  (let* ((symbol (identifier name))
-         (predicate (format #f "~a?" symbol))
-         (constructor (format #f "make-~a" symbol))
-         (raw-constructor (string-append "%make-" symbol))
-         (fields (record-fields ctx symbol shape))
-         (field-names (map (lambda (property)
-                             (identifier (property-name property)))
-                           fields))
-         (extra-schema (record-extra-schema shape))
-         (all-fields (if extra-schema
-                         (append field-names '("extra"))
-                         field-names)))
-    ;; The constructor
-    ;; The constructor
-    (if (null? all-fields)
-        (emit "(define* (~a)" constructor)
-        (emit-wrapped (format #f "(define* (~a" constructor)
-                      (append (list "#:key")
-                              (map (lambda (field property)
-                                     (format #f "(~a ~a)"
-                                             field
-                                             (field-default ctx property)))
-                                   field-names
-                                   fields)
-                              (if extra-schema (list "(extra '())") '()))
-                      ")"))
-    (with-indent
-     (lambda ()
-       (emit-docstring (record-docstring shape name constructor fields))
-       (emit-wrapped (format #f "(let ((value (~a" raw-constructor)
-                     all-fields
-                     ")))")
-       (with-indent
-        (lambda ()
-          (emit "(validate-~a value)" symbol)
-          (emit "value")))
-       (emit-close)))
-    (emit-close)
-    (emit-blank)
-    ;; The validator
-    (emit "(define (validate-~a value)" symbol)
-    (with-indent
-     (lambda ()
-       (emit-docstring
-        (format #f
-                (string-append
-                 "Check VALUE against the constraints the specification declares"
-                 " for ~a.~%~%Returns #t, or throws 'openapi-validation-error"
-                 " naming the field at fault.")
-                name))
-       (emit "(check-predicate '(\"~a\") value ~a \"~a\")" symbol predicate name)
-       (for-each (lambda (field property)
-                   (emit-property-checks ctx symbol field property))
-                 field-names
-                 fields)
-       (emit "#t")))
-    (emit-close)
-    (emit-blank)
-    ;; Validity predicate
-    (emit "(define (~a-valid? value)" symbol)
-    (with-indent
-     (lambda ()
-       (emit-docstring (format #f "Return #t when VALUE is a valid ~a." name))
-       (emit "(valid? (lambda () (validate-~a value)))" symbol)))
-    (emit-close)
-    (emit-blank)
-    ;; Encoder and decoder
-    (for-each emit-raw
-              (string-split (string-trim-right
-                             (record-converters-source ctx
-                                                       symbol
-                                                       predicate
-                                                       name
-                                                       constructor
-                                                       fields
-                                                       field-names
-                                                       extra-schema))
-                            #\newline))
-    (emit-blank)
-    ;; JSON merge patch
-    (emit "(define* (~a-apply-patch value patch)" symbol)
-    (with-indent
-     (lambda ()
-       (emit-docstring
-        (format #f
-                (string-append
-                 "Return VALUE with the RFC 7386 JSON merge patch PATCH applied."
-                 "~%Members of PATCH set to null are removed, and the result is"
-                 " validated~%like any other ~a, so a patch that would leave the"
-                 " record invalid raises.")
-                name))
-       (emit "(jso->~a (json-merge-patch (~a->jso value) patch))" symbol symbol)))
-    (emit-close)
-    (emit-blank)
-    ;; Enumerated properties
-    (for-each (lambda (property)
-                (emit-property-enumeration ctx symbol property))
-              fields)))
-(define (record-encoder-source ctx symbol predicate name fields field-names
-                               extra-schema)
-  "Return the source of the procedure that encodes a record as a jso object.
+(define (record-constructor-form ctx shape name symbol fields field-names
+                                extra-schema all-fields)
+  "Return the form of the constructor of the record @var{symbol}.
+
+The constructor takes keywords rather than positional arguments: a schema with
+eleven properties and three required ones is unreadable with positional
+arguments, and a missing required property is caught by validation with a message
+naming the field.  The record is built with the unchecked constructor and
+validated once, so a caller never holds an invalid record."
+  (let ((bindings (map (lambda (field property)
+                         (list field (field-default ctx property)))
+                       field-names
+                       fields)))
+    `(define* (,(constructor-symbol symbol)
+               ,@(if (and (null? bindings) (not extra-schema))
+                     '()
+                     (append (list #:key)
+                             bindings
+                             (if extra-schema
+                                 (list (list 'extra (quoted '())))
+                                 '()))))
+       ,(record-docstring shape name (constructor-symbol symbol) fields)
+       (let ((value (,(raw-constructor-symbol symbol) ,@all-fields)))
+         (,(validator-symbol symbol) value)
+         value))))
+
+(define (record-validator-form ctx symbol name fields field-names)
+  "Return the form of the procedure that validates the record @var{symbol}.
+
+Every claim the specification makes about a property becomes one line of the
+validator, under a path that names the member, so an error says which field is at
+fault rather than that the record is wrong."
+  `(define (,(validator-symbol symbol) value)
+     ,(string-append
+       "Check VALUE against the constraints the specification declares for "
+       name
+       ".\n\nReturns #t, or throws 'openapi-validation-error naming the field at"
+       " fault.")
+     (check-predicate ,(quoted (list symbol))
+                      value
+                      ,(predicate-symbol symbol)
+                      ,name)
+     ,@(append-map (lambda (field property)
+                     (property-check-forms ctx symbol field property))
+                   field-names
+                   fields)
+     #t))
+
+(define (record-validity-form symbol name)
+  "Return the form of the predicate that answers whether a value is valid.
+
+The validator throws; this is the same answer as a boolean, for a caller that
+wants to ask instead of catching."
+  `(define (,(valid-predicate-symbol symbol) value)
+     ,(format #f "Return #t when VALUE is a valid ~a." name)
+     (valid? (lambda () (,(validator-symbol symbol) value)))))
+
+(define (record-encoder-form ctx symbol name fields field-names extra-schema)
+  "Return the form of the procedure that encodes a record as a jso object.
 
 An optional member that holds @code{#f} is left out rather than written as null,
 so a request body only carries the members the caller set; a nullable member is
 written as null when it holds @code{#f}, because that is what the specification
 says null means for it."
-  (let* ((members
-          (map (lambda (property field)
-                 (let* ((shape (property-shape property))
-                        (accessor (format #f "(~a-~a value)" symbol field))
-                        (required? (property-required? property))
-                        (nullable? (shape-nullable? shape)))
-                   (cond
-                     ((or required? nullable?)
-                      (format #f "    (list (cons ~s ~a))"
-                              (property-name property)
-                              (box-expression ctx shape accessor
-                                              (not required?))))
-                     (else
-                      (format #f
-                              (string-append
-                               "    (if (eq? ~a #f)"
-                               "~%        '()"
-                               "~%        (list (cons ~s ~a)))")
-                              accessor
-                              (property-name property)
-                              (box-expression ctx shape accessor #f))))))
-               fields
-               field-names))
-         (extra (if extra-schema
-                    (format #f "    (list (cons \"additionalProperties\" extra))")
-                    ""))
-         (body (if (null? fields)
-                   "  (list)"
-                   (format #f "  (append~%~{~a~%~}~a)"
-                           members
-                           extra))))
-    (format #f
-            "(define (~a->jso value)~%  ~s~%  (check-predicate '(\"~a\") value ~a ~s)~%~a)"
-            symbol
-            "Return VALUE as a jso object, ready for JSON serialisation."
-            symbol
-            predicate
-            name
-            body)))
+  (let ((members
+         (map (lambda (property field)
+                (let* ((shape (property-shape property))
+                       (accessor (list (accessor-symbol symbol field) 'value))
+                       (required? (property-required? property))
+                       (nullable? (shape-nullable? shape)))
+                  (if (or required? nullable?)
+                      `(list (cons ,(property-name property)
+                                   ,(box-expression ctx shape accessor
+                                                    (not required?))))
+                      `(if (eq? ,accessor #f)
+                           ,(quoted '())
+                           (list (cons ,(property-name property)
+                                       ,(box-expression ctx shape accessor #f)))))))
+              fields
+              field-names)))
+    `(define (,(encoder-symbol symbol) value)
+       "Return VALUE as a jso object, ready for JSON serialisation."
+       (check-predicate ,(quoted (list symbol))
+                        value
+                        ,(predicate-symbol symbol)
+                        ,name)
+       ,(if (null? fields)
+            (list 'list)
+            `(append
+              ,@members
+              ,@(if extra-schema
+                    ;; The undeclared members are written last, under the name the
+                    ;; specification gave the extension point.
+                    (list (list 'list (list 'cons "additionalProperties" 'extra)))
+                    '()))))))
 
-(define (record-decoder-source ctx symbol name constructor fields field-names
-                               extra-schema)
-  "Return the source of the procedure that decodes a jso object into a record."
-  (let* ((arguments
-          (map (lambda (property field)
-                 (format #f "       #:~a ~a"
-                         field
-                         (unbox-expression
-                          ctx
-                          (property-shape property)
-                          (format #f "(jso-ref node ~s)" (property-name property)))))
-               fields
-               field-names))
-         (extra (if extra-schema
-                    (format #f "~%       #:extra ~a"
-                            (extra-decode ctx extra-schema field-names))
-                    ""))
-         (call (if (null? fields)
-                   (format #f "      (~a)" constructor)
-                   (format #f "      (~a~%~{~a~%~}~a)"
-                           constructor
-                           arguments
-                           extra))))
-    (format #f
-            (string-append
-             "(define (jso->~a node)~%  ~s~%"
-             "  (if (or (json-null? node) (not (jso-object? node)))~%"
-             "      #f~%"
-             "~a))")
-            symbol
-            (format #f "Build a ~a from NODE, a jso object." name)
-            call)))
+(define (record-decoder-form ctx symbol name fields field-names extra-schema)
+  "Return the form of the procedure that decodes a jso object into a record.
 
-(define (record-converters-source ctx symbol predicate name constructor fields
-                                  field-names extra-schema)
-  "Return the source of the two converters of the record @var{symbol}."
-  (string-append (record-encoder-source ctx symbol predicate name fields
-                                        field-names extra-schema)
-                 "\n\n"
-                 (record-decoder-source ctx symbol name constructor fields
-                                        field-names extra-schema)))
+Every member is decoded into the keyword its property is named after, so the
+decoder reads as the constructor call it is; a node that is null, or that is not
+an object, decodes to @code{#f}, which is how the rest of the runtime spells an
+absent value."
+  (let ((arguments
+         (append-map (lambda (property field)
+                       (list (symbol->keyword field)
+                             (unbox-expression
+                              ctx
+                              (property-shape property)
+                              (list 'jso-ref 'node (property-name property)))))
+                     fields
+                     field-names)))
+    `(define (,(decoder-symbol symbol) node)
+       ,(format #f "Build a ~a from NODE, a jso object." name)
+       (if (or (json-null? node) (not (jso-object? node)))
+           #f
+           ,(if (null? fields)
+                (list (constructor-symbol symbol))
+                `(,(constructor-symbol symbol)
+                  ,@arguments
+                  ,@(if extra-schema
+                        (list #:extra
+                              (extra-decode ctx extra-schema field-names))
+                        '())))))))
+
+(define (record-patch-form symbol name)
+  "Return the form of the merge patch procedure of the record @var{symbol}.
+
+A patch is decoded and then re-encoded rather than merged into the record, so a
+patch that no longer satisfies the specification fails the way any other invalid
+value does."
+  `(define* (,(patch-symbol symbol) value patch)
+     ,(string-append
+       "Return VALUE with the RFC 7386 JSON merge patch PATCH applied.\n"
+       "Members of PATCH set to null are removed, and the result is validated\n"
+       "like any other " name ", so a patch that would leave the record invalid"
+       " raises.")
+     (,(decoder-symbol symbol)
+      (json-merge-patch (,(encoder-symbol symbol) value) patch))))
+
+(define (record-forms ctx shape name)
+  "Return the forms of the record @var{name}, in the order they are written.
+
+The record type itself is not here: it is emitted ahead of every definition that
+refers to its predicate, and this is everything that does.  The enumerations of
+enumerated properties come after them, so that the members of the record are
+described in one run and the values they accept follow, the way a reader looks
+for them."
+  (let* ((symbol (identifier name))
+         (fields (record-fields ctx symbol shape))
+         (field-names (record-field-names fields))
+         (extra-schema (record-extra-schema shape))
+         (all-fields (if extra-schema
+                         (append field-names '(extra))
+                         field-names)))
+    (append
+     (list (record-constructor-form ctx shape name symbol fields field-names
+                                   extra-schema all-fields)
+           (record-validator-form ctx symbol name fields field-names)
+           (record-validity-form symbol name)
+           (record-encoder-form ctx symbol name fields field-names extra-schema)
+           (record-decoder-form ctx symbol name fields field-names extra-schema)
+           (record-patch-form symbol name))
+     (append-map (lambda (property)
+                   (property-enumeration-forms ctx symbol property))
+                 fields))))
 
 (define (extra-decode ctx extra-schema known-fields)
-  "Return source that decodes the undeclared members of a jso object."
+  "Return the form that decodes the undeclared members of a jso object.
+
+The members the record already has fields for are skipped, so a value cannot be
+read into two places at once."
   (let ((shape (schema-shape (context-document ctx)
                              extra-schema
                              #:registry (context-registry ctx))))
-    (format #f
-            (string-append "(map (lambda (entry) (cons (car entry) ~a))"
-                           " (filter (lambda (entry) (not (member (car entry) '~s)))"
-                           " node))")
-            (unbox-expression ctx shape "(cdr entry)")
-            known-fields)))
+    `(map (lambda (entry)
+            (cons (car entry)
+                  ,(unbox-expression ctx shape '(cdr entry))))
+          (filter (lambda (entry)
+                    (not (member (car entry) ,(quoted known-fields))))
+                  node))))
 
 (define (boolean-shape? shape)
   "Return @code{#t} when @var{shape} is a boolean.
@@ -767,38 +841,44 @@ mean missing."
   (and (scalar-shape? shape)
        (eq? (shape-type shape) 'boolean)))
 
-(define (emit-property-checks ctx symbol field property)
-  "Emit the validation lines of one property of a record."
-  (let* ((path (format #f "'(\"~a\" ~s)" symbol (property-name property)))
-         (expression (format #f "(~a-~a value)" symbol field))
+(define (property-check-forms ctx symbol field property)
+  "Return the validation forms of one property of a record.
+
+A required property is checked for presence and then checked where it sits; an
+optional or nullable one is checked only when it holds something, because
+@code{#f} is how an absent member is spelled and the checks are about a value that
+is there."
+  (let* ((path (quoted (list symbol (property-name property))))
+         (expression (list (accessor-symbol symbol field) 'value))
          (shape (property-shape property))
          (required? (and (property-required? property)
                          (not (boolean-shape? shape))))
          (checks (schema-checks ctx shape path expression)))
-    (when required?
-      (emit "(check-required ~a ~a)" path expression))
-    (when (pair? checks)
-      (if (or (not required?) (shape-nullable? shape))
-          (begin
-            (emit "(when ~a" expression)
-            (with-indent
-             (lambda ()
-               (for-each (lambda (line) (emit-raw line)) checks)))
-            (emit ")"))
-          (for-each (lambda (line) (emit-raw line)) checks)))))
+    (append
+     (if required?
+         (list `(check-required ,path ,expression))
+         '())
+     (cond
+       ((null? checks) '())
+       ((or (not required?) (shape-nullable? shape))
+        (list `(when ,expression ,@checks)))
+       (else checks)))))
 
-(define (emit-property-enumeration ctx symbol property)
-  "Emit the constants and predicate of an enumerated property."
+(define (property-enumeration-forms ctx symbol property)
+  "Return the forms of the enumeration of @var{property}, when it is one.
+
+An enumeration declared inline in a property is not a component schema, so nothing
+else would generate its constants and its predicate; when the property refers to a
+component schema, that schema emits them itself and this stays out of the way."
   (let ((shape (property-shape property)))
-    (when (and (enum-shape? shape)
-               (shape-name shape)
-               (not (component-schema? ctx (shape-name shape))))
-      (let ((base (shape-name shape))
-            (title (format #f "~a.~a" symbol (property-name property))))
-        (emit-enumeration ctx shape base title)
-        (emit-blank)
-        (emit-enumeration-converters ctx shape base title)
-        (emit-blank)))))
+    (if (and (enum-shape? shape)
+             (shape-name shape)
+             (not (component-schema? ctx (shape-name shape))))
+        (let ((base (shape-name shape))
+              (title (format #f "~a.~a" symbol (property-name property))))
+          (append (enumeration-forms ctx shape base title)
+                  (enumeration-converter-forms (identifier base) title)))
+        '())))
 
 (define (component-schema? ctx name)
   "Return #t when @var{name} is the name of a component schema."
@@ -831,222 +911,202 @@ name, and the property it belongs to is the most descriptive one available:
        properties))
 
 (define (record-docstring shape name constructor properties)
-  "Return the docstring of the constructor of @var{shape}."
+  "Return the docstring of the constructor of @var{shape}.
+
+The docstring is prose -- it says what the record is, which fields it holds and
+how to call the constructor -- so it is assembled as text and rendered as a
+multi-line string literal.  The paragraphs are joined here rather than through
+@code{~%} so that the text in this file reads the way it comes out in the
+generated file."
   (let* ((schema (shape-schema shape))
          (description (and schema (jso-ref schema "description")))
          (title (and schema (jso-ref schema "title")))
          (summary (cond
                     ((and (string? description) (not (string-null? description)))
-                     description)
+                     (string-trim-both description))
                     ((and (string? title) (not (string-null? title)))
-                     title)
-                    (else (format #f "A ~a." name)))))
-    (string-append
-     (format #f "Create a ~a." name)
-     (if (string-null? (string-trim-both summary))
-         ""
-         (format #f "~%~%~a" (string-trim-both summary)))
-     (if (null? properties)
-         ""
-         (format #f "~%~%Fields: ~{~a~^, ~}."
-                 (map (lambda (property)
-                        (format #f "~a (~a~a)"
-                                (property-name property)
-                                (schema-display-name (property-shape property))
-                                (if (property-required? property)
-                                    ", required"
-                                    "")))
-                      properties)))
-     (format #f "~%~%@example~%(~a~a)~%@end example"
-             constructor
-             (if (null? properties)
-                 ""
-                 (format #f " ~{~a~^ ~}"
-                         (map (lambda (property)
-                                (format #f "#:~a <~a>"
-                                        (identifier (property-name property))
-                                        (schema-display-name
-                                         (property-shape property))))
-                              properties)))))))
+                     (string-trim-both title))
+                    (else (format #f "A ~a." name))))
+         (fields (if (null? properties)
+                     ""
+                     (format #f "Fields: ~{~a~^, ~}."
+                             (map (lambda (property)
+                                    (format #f "~a (~a~a)"
+                                            (property-name property)
+                                            (schema-display-name
+                                             (property-shape property))
+                                            (if (property-required? property)
+                                                ", required"
+                                                "")))
+                                  properties))))
+         (example (format #f "(~a~a)"
+                          constructor
+                          (if (null? properties)
+                              ""
+                              (format #f " ~{~a~^ ~}"
+                                      (map (lambda (property)
+                                             (format #f "#:~a <~a>"
+                                                     (identifier
+                                                      (property-name property))
+                                                     (schema-display-name
+                                                      (property-shape property))))
+                                           properties))))))
+    (string-join (filter (lambda (paragraph) (not (string-null? paragraph)))
+                         (list (format #f "Create a ~a." name)
+                               summary
+                               fields
+                               (format #f "@example~%~a~%@end example" example)))
+                 "\n\n")))
 
 ;;; Commentary:
 ;;; Named schemas that are not objects
 
-(define (emit-enumeration-converters ctx shape symbol name)
-  "Emit the two converters of the enumeration @var{name}."
-  (emit "(define (~a->jso value)" symbol)
-    (with-indent
-     (lambda ()
-       (emit-docstring "Return VALUE as a jso scalar, after checking it.")
-       (emit "(if (~a? value)" symbol)
-       (with-indent (lambda () (emit "value")))
-     (with-indent
-      (lambda ()
-        (emit "(validation-failure '(\"~a\") \"must be one of ~a-values, got ~~s\" value)"
-              symbol symbol)))
-     (emit-close)))
-  (emit-close)
-  (emit-blank)
-  (emit "(define (jso->~a node)" symbol)
-  (with-indent
-   (lambda ()
-     (emit-docstring (format #f "Read a ~a from the jso scalar NODE." name))
-     (emit "(if (json-null? node) #f node)")))
-  (emit-close))
+(define (enumeration-converter-forms symbol name)
+  "Return the forms of the two converters of an enumeration.
 
-(define (emit-named-enumeration ctx shape name)
-  "Emit the enumeration, its predicate and its converters."
+The encoding converter refuses a value outside the enumeration, so a jso is never
+written with a spelling the specification does not define; the decoding one stays
+lenient and lets the validator say what is wrong, because a decoder that throws
+hides which member was at fault."
+  (list `(define (,(encoder-symbol symbol) value)
+           "Return VALUE as a jso scalar, after checking it."
+           (if (,(predicate-symbol symbol) value)
+               value
+               (validation-failure
+                ,(quoted (list symbol))
+                ,(format #f "must be one of ~a-values, got ~~s" symbol)
+                value)))
+        `(define (,(decoder-symbol symbol) node)
+           ,(format #f "Read a ~a from the jso scalar NODE." name)
+           (if (json-null? node) #f node))))
+
+(define (named-enumeration-forms ctx shape name)
+  "Return the forms of a named enumeration: its values, its predicate and its
+converters."
   (let ((symbol (identifier name)))
-    (emit-enumeration ctx shape symbol name)
-    (emit-blank)
-    (emit-enumeration-converters ctx shape symbol name)))
+    (append (enumeration-forms ctx shape symbol name)
+            (enumeration-converter-forms symbol name))))
 
-(define (emit-validating-predicate ctx shape symbol doc)
-  "Emit a predicate that validates @var{shape} by running its checks."
-  (emit "(define (~a? value)" symbol)
-  (with-indent
-   (lambda ()
-     (emit-docstring doc)
-     (emit "(valid? (lambda ()")
-     (with-indent
-      (lambda ()
-        (for-each emit-raw
-                  (schema-checks ctx shape
-                                 (format #f "'(\"~a\")" symbol)
-                                 "value"))
-        (emit "#t")))
-     (emit-close)
-     (emit-close)))
-  (emit-close))
+(define (validating-predicate-form ctx shape symbol doc)
+  "Return the form of a predicate that validates @var{shape} by running its checks.
 
-(define (emit-scalar-converters symbol name)
-  "Emit the two identity-ish converters of a named scalar."
-  (emit "(define (~a->jso value)" symbol)
-  (with-indent
-   (lambda ()
-     (emit-docstring "Return VALUE as a jso scalar.")
-     (emit "value")))
-  (emit-close)
-  (emit-blank)
-  (emit "(define (jso->~a node)" symbol)
-  (with-indent
-   (lambda ()
-     (emit-docstring (format #f "Read a ~a from the jso scalar NODE." name))
-     (emit "(if (json-null? node) #f node)")))
-  (emit-close))
+A named scalar, list or map has no record behind it, so its predicate is its
+validator: it is written as @code{(valid? (lambda () ...))}, which turns the first
+failure into @code{#f} instead of an error."
+  `(define (,(predicate-symbol symbol) value)
+     ,doc
+     (valid? (lambda ()
+               ,@(schema-checks ctx shape (quoted (list symbol)) 'value)
+               #t))))
 
-(define (emit-named-scalar ctx shape name)
+(define (scalar-converter-forms symbol name)
+  "Return the forms of the two converters of a named scalar.
+
+A scalar is already a jso value, so encoding is the identity and decoding only
+turns a JSON null into @code{#f}."
+  (list `(define (,(encoder-symbol symbol) value)
+           "Return VALUE as a jso scalar."
+           value)
+        `(define (,(decoder-symbol symbol) node)
+           ,(format #f "Read a ~a from the jso scalar NODE." name)
+           (if (json-null? node) #f node))))
+
+(define (named-scalar-forms ctx shape name)
+  "Return the forms of a named scalar: its predicate and its converters."
   (let ((symbol (identifier name)))
-    (emit-validating-predicate
-     ctx shape symbol
-     (format #f "Return #t when VALUE is a valid ~a." (schema-display-name shape)))
-    (emit-blank)
-    (emit-scalar-converters symbol name)))
+    (append
+     (list (validating-predicate-form
+            ctx shape symbol
+            (format #f "Return #t when VALUE is a valid ~a."
+                    (schema-display-name shape))))
+     (scalar-converter-forms symbol name))))
 
-(define (emit-named-list ctx shape name)
+(define (named-list-forms ctx shape name)
+  "Return the forms of a named list: its predicate and its converters."
   (let* ((symbol (identifier name))
          (item (shape-items shape)))
-    (emit "(define (~a? value)" symbol)
-    (with-indent
-     (lambda ()
-       (emit-docstring
-        (format #f "Return #t when VALUE is a list of ~a."
-                (schema-display-name item)))
-       (emit "(and (list? value) (every ~a value))" (schema-predicate ctx item))))
-    (emit-close)
-    (emit-blank)
-    (emit "(define (~a->jso value)" symbol)
-    (with-indent
-     (lambda ()
-       (emit-docstring "Return VALUE as a jso array.")
-       (emit "(list->vector (map (lambda (element) ~a) value))"
-             (box-expression ctx item "element"))))
-    (emit-close)
-    (emit-blank)
-    (emit "(define (jso->~a node)" symbol)
-    (with-indent
-     (lambda ()
-       (emit-docstring
-        (format #f "Read a list of ~a from NODE." (schema-display-name item)))
-       (emit "(map (lambda (element) ~a) (jso-array->list node))"
-             (unbox-expression ctx item "element"))))
-    (emit-close)))
+    (list
+     `(define (,(predicate-symbol symbol) value)
+        ,(format #f "Return #t when VALUE is a list of ~a."
+                 (schema-display-name item))
+        (and (list? value)
+             (every ,(schema-predicate ctx item) value)))
+     `(define (,(encoder-symbol symbol) value)
+        "Return VALUE as a jso array."
+        (list->vector
+         (map (lambda (element)
+                ,(box-expression ctx item 'element))
+              value)))
+     `(define (,(decoder-symbol symbol) node)
+        ,(format #f "Read a list of ~a from NODE." (schema-display-name item))
+        (map (lambda (element)
+               ,(unbox-expression ctx item 'element))
+             (jso-array->list node))))))
 
-(define (emit-named-map ctx shape name)
+(define (named-map-forms ctx shape name)
+  "Return the forms of a named map: its predicate and its converters.
+
+A map is an alist, so its predicate has to say both that the value is one and --
+unless the specification accepts any value as a member -- that every member is of
+the shape the specification declares."
   (let* ((symbol (identifier name))
          (value-shape (shape-items shape)))
-    (emit "(define (~a? value)" symbol)
-    (with-indent
-     (lambda ()
-       (emit-docstring
-        (format #f "Return #t when VALUE maps strings to ~a."
-                (schema-display-name value-shape)))
-       (if (any-shape? value-shape)
-           (emit "(and (list? value) (every pair? value))")
-           (emit "(and (list? value) (every pair? value)~%       (every (lambda (entry) (~a (cdr entry))) value))"
-                 (schema-predicate ctx value-shape)))))
-    (emit-close)
-    (emit-blank)
-    (emit "(define (~a->jso value)" symbol)
-    (with-indent
-     (lambda ()
-       (emit-docstring "Return VALUE as a jso object.")
-       (emit "(map (lambda (entry) (cons (car entry) ~a)) value)"
-             (box-expression ctx value-shape "(cdr entry)"))))
-    (emit-close)
-    (emit-blank)
-    (emit "(define (jso->~a node)" symbol)
-    (with-indent
-     (lambda ()
-       (emit-docstring
-        (format #f "Read a map counting ~a from NODE." 
-                (schema-display-name value-shape)))
-       (emit "(if (jso-object? node)")
-       (with-indent
-        (lambda ()
-          (emit "(map (lambda (entry) (cons (car entry) ~a)) node)"
-                (unbox-expression ctx value-shape "(cdr entry)"))))
-       (with-indent (lambda () (emit "'()")))
-       (emit-close)))
-    (emit-close)))
+    (list
+     `(define (,(predicate-symbol symbol) value)
+        ,(format #f "Return #t when VALUE maps strings to ~a."
+                 (schema-display-name value-shape))
+        (and (list? value)
+             (every pair? value)
+             ,@(if (any-shape? value-shape)
+                   '()
+                   (list `(every (lambda (entry)
+                                   (,(schema-predicate ctx value-shape)
+                                    (cdr entry)))
+                                 value)))))
+     `(define (,(encoder-symbol symbol) value)
+        "Return VALUE as a jso object."
+        (map (lambda (entry)
+               (cons (car entry)
+                     ,(box-expression ctx value-shape '(cdr entry))))
+             value))
+     `(define (,(decoder-symbol symbol) node)
+        ,(format #f "Read a map counting ~a from NODE."
+                 (schema-display-name value-shape))
+        (if (jso-object? node)
+            (map (lambda (entry)
+                   (cons (car entry)
+                         ,(unbox-expression ctx value-shape '(cdr entry))))
+                 node)
+            ,(quoted '()))))))
 
-(define (emit-named-union ctx shape name)
+(define (named-union-forms ctx shape name)
+  "Return the forms of a named union: its predicate, its encoder and its decoder.
+
+A union has no record of its own, so each definition dispatches on the branch
+predicates in the order the specification declares them; the decoder is the same
+form any other union gets, discriminator and all."
   (let* ((symbol (identifier name))
          (branches (shape-branches shape)))
-    (emit "(define (~a? value)" symbol)
-    (with-indent
-     (lambda ()
-       (emit-docstring
-        (format #f "Return #t when VALUE is one of the shapes ~a accepts." name))
-       (emit "(or ~{~a~^ ~})"
-             (map (lambda (branch)
-                    (format #f "(~a value)" (schema-predicate ctx branch)))
-                  branches))))
-    (emit-close)
-    (emit-blank)
-    (emit "(define (~a->jso value)" symbol)
-    (with-indent
-     (lambda ()
-       (emit-docstring "Return VALUE as a jso value.")
-       (emit "(cond")
-       (with-indent
-        (lambda ()
-          (for-each (lambda (branch)
-                      (emit "((~a value) ~a)"
-                            (schema-predicate ctx branch)
-                            (box-expression ctx branch "value")))
-                    branches)
-          (emit "(else (validation-failure '(\"~a\") \"must be one of ~a\" value))"
-                symbol symbol)))
-       (emit-close)))
-    (emit-close)
-    (emit-blank)
-    (emit "(define (jso->~a node)" symbol)
-    (with-indent
-     (lambda ()
-       (emit-docstring "Read the union value NODE.")
-       (emit-raw (unbox-expression ctx shape "node"))))
-    (emit-close)))
+    (list
+     `(define (,(predicate-symbol symbol) value)
+        ,(format #f "Return #t when VALUE is one of the shapes ~a accepts." name)
+        (or ,@(map (lambda (branch)
+                     (list (schema-predicate ctx branch) 'value))
+                   branches)))
+     `(define (,(encoder-symbol symbol) value)
+        "Return VALUE as a jso value."
+        (cond
+         ,@(map (lambda (branch)
+                  (list (list (schema-predicate ctx branch) 'value)
+                        (box-expression ctx branch 'value)))
+                branches)
+         (else (validation-failure
+                ,(quoted (list symbol))
+                ,(format #f "must be one of ~a" symbol)
+                value))))
+     `(define (,(decoder-symbol symbol) node)
+        "Read the union value NODE."
+        ,(unbox-expression ctx shape 'node)))))
 ;;; Commentary:
 ;;; The module
 
@@ -1085,45 +1145,44 @@ export list and the definitions agree on every name."
                      shape))))
        (registry-named-schemas (context-registry ctx))))
 
-(define (emit-schema ctx name shape)
-  "Emit everything a single named schema needs."
+(define (schema-forms ctx name shape)
+  "Return the forms a single named schema needs, in the order they are written."
   (case (shape-kind shape)
-    ((object) (emit-record ctx shape name))
-    ((enum) (emit-named-enumeration ctx shape name))
-    ((list) (emit-named-list ctx shape name))
-    ((map) (emit-named-map ctx shape name))
-    ((union) (emit-named-union ctx shape name))
-    ((scalar) (emit-named-scalar ctx shape name))
+    ((object) (record-forms ctx shape name))
+    ((enum) (named-enumeration-forms ctx shape name))
+    ((list) (named-list-forms ctx shape name))
+    ((map) (named-map-forms ctx shape name))
+    ((union) (named-union-forms ctx shape name))
+    ((scalar) (named-scalar-forms ctx shape name))
     (else
-     (emit-comment
-      "The schema ~a accepts any value, so no procedure is generated." name))))
+     (list (comment (format #f
+                            "The schema ~a accepts any value, so no procedure is generated."
+                            name))))))
 
 (define (record-exports symbol shape)
   "Return the symbols a record module exports for one schema."
   (append
-   (list (string->symbol (format #f "<~a>" symbol))
-         (string->symbol (format #f "~a?" symbol))
-         (string->symbol (format #f "make-~a" symbol))
-         (string->symbol (format #f "validate-~a" symbol))
-         (string->symbol (format #f "~a-valid?" symbol))
-         (string->symbol (format #f "~a->jso" symbol))
-         (string->symbol (format #f "jso->~a" symbol))
-         (string->symbol (format #f "~a-apply-patch" symbol)))
+   (list (type-symbol symbol)
+         (predicate-symbol symbol)
+         (constructor-symbol symbol)
+         (validator-symbol symbol)
+         (valid-predicate-symbol symbol)
+         (encoder-symbol symbol)
+         (decoder-symbol symbol)
+         (patch-symbol symbol))
    (map (lambda (property)
-          (string->symbol (format #f "~a-~a"
-                                  symbol
-                                  (identifier (property-name property)))))
+          (accessor-symbol symbol
+                           (string->symbol (identifier (property-name property)))))
         (shape-properties shape))))
 
 (define (enumeration-exports symbol shape)
   "Return the symbols an enumeration exports."
-  (append (list (string->symbol (format #f "~a-values" symbol))
-                (string->symbol (format #f "~a?" symbol))
-                (string->symbol (format #f "~a->jso" symbol))
-                (string->symbol (format #f "jso->~a" symbol)))
+  (append (list (values-symbol symbol)
+                (predicate-symbol symbol)
+                (encoder-symbol symbol)
+                (decoder-symbol symbol))
           (map (lambda (value)
-                 (string->symbol
-                  (identifier (format #f "~a-~a" symbol value))))
+                 (constant-symbol symbol value))
                (shape-values shape))))
 
 (define (property-enumeration-exports ctx property)
@@ -1146,48 +1205,115 @@ export list and the definitions agree on every name."
                            (shape-properties shape))))
       ((enum) (enumeration-exports symbol shape))
       (else
-       (list (string->symbol (format #f "~a?" symbol))
-             (string->symbol (format #f "~a->jso" symbol))
-             (string->symbol (format #f "jso->~a" symbol)))))))
+       (list (predicate-symbol symbol)
+             (encoder-symbol symbol)
+             (decoder-symbol symbol))))))
+
+;;; Commentary:
+;;; The module
+;;
+;; A generated file is three things: a banner that says where it came from, a
+;; module header that says what it offers, and the forms of the schemas.  They are
+;; returned as one list and rendered once, so the file has exactly the layout the
+;; renderer gives a list of forms -- a blank line between them and a comment
+;; directly above what it explains.
+
+(define (wrap-comment text width)
+  "Return @var{text} as a list of lines no longer than @var{width}.
+
+A comment is rendered verbatim, so the banner has to be wrapped before it is
+handed to the renderer; a generated file whose first line runs off the edge of the
+console is not one a reader trusts."
+  (if (string-null? text)
+      (list "")
+      (let loop ((words (string-split text #\space))
+                 (current "")
+                 (lines '()))
+        (cond
+          ((null? words)
+           (reverse (cons current lines)))
+          ((string-null? current)
+           (loop (cdr words) (car words) lines))
+          ((> (+ (string-length current) 1 (string-length (car words))) width)
+           (loop (cdr words) (car words) (cons current lines)))
+          (else
+           (loop (cdr words)
+                 (string-append current " " (car words))
+                 lines))))))
+
+(define (header-forms config spec)
+  "Return the banner comment that opens the generated file.
+
+@var{config} says which specification was read and by which generator, and the
+banner repeats it in the file itself: a generated file that has been copied away
+from its specification still says what it was generated from.  The mode line and
+the paragraphs are one comment, because a comment attaches to the form below it and
+a banner belongs to the file rather than to the module."
+  (let ((paragraphs
+         (list (format #f "Models generated from ~a"
+                       (or (config-source config) "a specification"))
+               (string-append
+                "Generated by guile-openapi-generator "
+                (config-generator-version config)
+                ", from the "
+                (spec-title spec)
+                " "
+                (spec-version spec)
+                " specification.  Do not edit this file: regenerate it"
+                " instead."))))
+    (list (comment (string-join
+                    (append (list "-*- mode: scheme; coding: utf-8 -*-" "")
+                            (append-map (lambda (paragraph)
+                                          (wrap-comment paragraph 74))
+                                        paragraphs))
+                    "\n"))
+          (blank))))
+
+(define (module-form name imports exports)
+  "Return the @code{define-module} form of the generated file.
+
+@var{name} is the module name as a list of symbols, @var{imports} the modules the
+generated code calls into and @var{exports} the symbols a caller may use.  The
+export list is what the rest of this file promises: a definition that is not in it
+is an implementation detail of the module."
+  (when (null? exports)
+    (error "A generated module must export something"))
+  (append (list 'define-module name)
+          (append-map (lambda (importation)
+                        (list #:use-module importation))
+                      imports)
+          (list #:export exports)))
 
 (define (emit-models spec config)
   "Return the source text of the models module of @var{spec}.
 
 The module name comes from @var{config}: with a root of @code{petstore} the
-module is @code{(petstore models)} and the file is @code{petstore/models.scm}."
+module is @code{(petstore models)} and the file is @code{petstore/models.scm}.
+
+Every definition is built as a form and the file is rendered once, at the end, so
+this procedure is the whole of the layout: banner, module header, the record
+types, and then everything else."
   (let* ((ctx (make-context spec config))
          (models (prepare-models ctx))
          (exports (append-map (lambda (entry)
                                 (model-exports ctx (car entry) (cdr entry)))
                               models)))
-    (code->string
-     (lambda ()
-       (emit-header
-        (list (format #f "Models generated from ~a"
-                      (or (config-source config) "a specification"))
-              (format #f
-                      (string-append
-                       "Generated by guile-openapi-generator ~a, from the ~a ~a"
-                       " specification.  Do not edit this file: regenerate it"
-                       " instead.")
-                      (config-generator-version config)
-                      (spec-title spec)
-                      (spec-version spec))))
-       (emit-module (config-module config 'models)
-                    (list (config-jso-module config)
-                          (config-runtime-module config)
-                          '(srfi srfi-1)
-                          '(srfi srfi-9))
-                    '()
-                    exports)
-       (emit-blank)
-       ;; Record types first: a predicate referenced above its own
-       ;; define-record-type compiles to the syntax, not to the procedure.
-       (for-each (lambda (entry)
-                   (let ((shape (cdr entry)))
-                     (when (object-shape? shape)
-                       (emit-record-type ctx shape (car entry)))))
-                 models)
-       (for-each (lambda (entry)
-                   (emit-schema ctx (car entry) (cdr entry)))
-                 models)))))
+    (forms->string
+     (append
+      (header-forms config spec)
+      (list (module-form (config-module config 'models)
+                         (list (config-jso-module config)
+                               (config-runtime-module config)
+                               '(srfi srfi-1)
+                               '(srfi srfi-9))
+                         exports))
+      ;; Record types first: a predicate referenced above its own
+      ;; define-record-type compiles to the syntax, not to the procedure.
+      (append-map (lambda (entry)
+                    (if (object-shape? (cdr entry))
+                        (list (record-type-form ctx (cdr entry) (car entry)))
+                        '()))
+                  models)
+      (append-map (lambda (entry)
+                    (schema-forms ctx (car entry) (cdr entry)))
+                  models)))))

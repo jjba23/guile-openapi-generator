@@ -94,11 +94,15 @@
                                        "(define* (pet-apply-patch value patch)")))
 
          (test "An enumeration becomes values and constants"
+               ;; A definition always breaks: the values are on the line below
+               ;; the name they are bound to.
                (assert-true
                 (contains? petstore-text
-                           "(define pet-status-values (list \"available\" \"pending\" \"sold\"))"))
+                           (string-append "(define pet-status-values\n"
+                                          "  (list \"available\" \"pending\" \"sold\"))")))
                (assert-true (contains? petstore-text
-                                       "(define pet-status-available \"available\")"))
+                                       (string-append "(define pet-status-available\n"
+                                                      "  \"available\")")))
                (assert-true (contains? petstore-text
                                        "(define (pet-status? value)")))
 

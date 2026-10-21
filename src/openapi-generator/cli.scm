@@ -92,11 +92,22 @@
   (format port
           "  openapi-generator generate -i petstore.yaml -o gen -c artanis -H curl~%"))
 
+(define (option-field option name)
+  "Return the value of the @var{name} property of @var{option}, or @code{#f}.
+
+An option specification is a list of two-element lists, so the property is the
+cadr of its entry, not the cdr: @code{(single-char #\\h)} holds the character
+itself, while @code{assoc-ref} would hand back the one-element list around it and
+a short spelling would print as @code{(-(h))}."
+  (let ((entry (assoc name (cdr option))))
+    (and entry (cadr entry))))
+
 (define (option-spelling option)
-  (let* ((long (car option))
-         (short (assoc-ref (cdr option) 'single-char))
-         (value (assoc-ref (cdr option) 'value)))
-    (string-append "  --" (symbol->string long)
+  "Return how @var{option} is spelled in the usage text, for example
+@code{--input (-i) VALUE}."
+  (let ((short (option-field option 'single-char))
+        (value (option-field option 'value)))
+    (string-append "  --" (symbol->string (car option))
                    (if short (format #f " (-~a)" short) "")
                    (if value " VALUE" ""))))
 

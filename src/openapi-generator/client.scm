@@ -54,7 +54,7 @@
   #:use-module (openapi-generator spec)
   #:use-module (openapi-generator schema)
   #:use-module (openapi-generator models)
-  #:use-module (openapi-generator emitter)
+  #:use-module (openapi-generator code)
   #:use-module (openapi-generator config)
   #:export (emit-client))
 
@@ -62,147 +62,164 @@
 ;;; Support code
 ;;
 ;; The transport and the plumbing around it do not depend on the specification,
-;; so they are written here as text that is known to be balanced.  Only the
-;; per-operation procedures and the security scheme table are built from the
-;; document, and those are built with string-append so that a missing
-;; parenthesis cannot hide in a nested emitter call.
+;; so they are written here as forms: quoted lists that read like the code they
+;; become.  Only the per-operation procedures and the security scheme table are
+;; built from the document, and those are quasiquoted around the values taken
+;; from it, so a name or a path is substituted rather than concatenated.
 
-(define client-record-template
-  (string-append
-   "(define-record-type <api-client>\n"
-   "  (%make-api-client base-url auth headers timeout)\n"
-   "  api-client?\n"
-   "  (base-url api-client-base-url)\n"
-   "  (auth api-client-auth)\n"
-   "  (headers api-client-headers)\n"
-   "  (timeout api-client-timeout))\n"
-   "\n"
-   "(define* (make-api-client #:key\n"
-   "                          (base-url \"~a\")\n"
-   "                          (auth #f)\n"
-   "                          (headers '())\n"
-   "                          (timeout 30))\n"
-   "  \"Create a client for this API.\n"
-   "\n"
-   "BASE-URL prefixes every path.  AUTH holds the credentials, or #f to call only\n"
-   "public operations; HEADERS are sent with every request; TIMEOUT is the\n"
-   "request timeout in seconds.\"\n"
-   "  (%make-api-client base-url auth headers timeout))\n"
-   "\n"
-   "(define (client-url client path query)\n"
-   "  \"Return the absolute URL of PATH, with the QUERY alist rendered.\"\n"
-   "  (let ((base (string-trim-right (api-client-base-url client) #\\/))\n"
-   "        (parameters (query-string query)))\n"
-   "    (if (string-null? parameters)\n"
-   "        (string-append base path)\n"
-   "        (string-append base path \"?\" parameters))))\n"))
+(define* (client-record-forms base-url)
+  "Return the forms that define the client record and the URL builder.
 
-(define guile-send-template
-  (string-append
-   "(define* (client-send client method path #:key query headers body)\n"
-   "  \"Send METHOD to PATH and return the <http-response>.\n"
-   "\n"
-   "The body is sent as JSON and the response body is decoded as JSON, so callers\n"
-   "never deal with strings.  The transport is (web client) from Guile itself,\n"
-   "which is why a generated client needs nothing but Guile and guile-json.\"\n"
-   "  (let* ((url (client-url client path query))\n"
-   "         (given (if (and body (not (header-ref headers \"Content-Type\")))\n"
-   "                    (header-set headers \"Content-Type\" \"application/json\")\n"
-   "                    headers))\n"
-   "         (request-headers (append (list (cons \"Accept\" \"application/json\"))\n"
-   "                                  given\n"
-   "                                  (api-client-headers client)))\n"
-   "         (payload (and body (jso->json-string body))))\n"
-   "    (receive (response response-body)\n"
-   "        (http-request url\n"
-   "                      #:method method\n"
-   "                      #:headers (guile-headers request-headers)\n"
-   "                      #:body payload)\n"
-   "      (make-http-response (response-code response)\n"
-   "                          (response-headers response)\n"
-   "                          (decode-body response-body)))))\n"
-   "\n"
-   "(define (guile-headers headers)\n"
-   "  \"Return HEADERS as (web client) wants them.\n"
-   "\n"
-   "(web client) takes symbol names and, for the headers it knows how to parse,\n"
-   "already parsed values; every other header is passed through unchanged.\"\n"
-   "  (map (lambda (header)\n"
-   "         (let ((name (string->symbol (string-downcase (car header))))\n"
-   "               (value (cdr header)))\n"
-   "           (cons name\n"
-   "                 (cond\n"
-   "                   ((eq? name 'content-type) (list (string->symbol value)))\n"
-   "                   ((eq? name 'accept)\n"
-   "                    (list (list (string->symbol value))))\n"
-   "                   (else value)))))\n"
-   "       headers))\n"
-   "\n"
-   "(define (decode-body response-body)\n"
-   "  \"Return RESPONSE-BODY, a string or a bytevector, as a jso value.\n"
-   "\n"
-   "(web client) decodes a body to a string only for the content types it knows\n"
-   "to be textual, so a JSON response usually arrives as bytes.\"\n"
-   "  (let ((text (cond\n"
-   "                ((string? response-body) response-body)\n"
-   "                ((bytevector? response-body) (utf8->string response-body))\n"
-   "                (else \"\"))))\n"
-   "    (if (string-null? (string-trim-both text))\n"
-   "        json-null\n"
-   "        (json-string->jso text))))\n"))
+BASE-URL is what the constructor defaults to: the first server of the
+specification, unless the caller overrides it."
+  (list `(define-record-type <api-client>
+           (%make-api-client base-url auth headers timeout)
+           api-client?
+           (base-url api-client-base-url)
+           (auth api-client-auth)
+           (headers api-client-headers)
+           (timeout api-client-timeout))
+        `(define* (make-api-client #:key
+                                   (base-url ,base-url)
+                                   (auth #f)
+                                   (headers '())
+                                   (timeout 30))
+           "Create a client for this API.
 
-(define curl-send-template
-  (string-append
-   "(define* (client-send client method path #:key query headers body)\n"
-   "  \"Send METHOD to PATH and return the <http-response>.\n"
-   "\n"
-   "The body is sent as JSON and the response body is decoded as JSON.  The\n"
-   "transport is libcurl through guile-curl, so proxy settings, TLS and HTTP/2 are\n"
-   "libcurl's; the response is read as bytes and decoded as UTF-8.\"\n"
-   "  (let* ((url (client-url client path query))\n"
-   "         (payload (and body (jso->json-string body)))\n"
-   "         (given (if (and payload (not (header-ref headers \"Content-Type\")))\n"
-   "                    (header-set headers \"Content-Type\" \"application/json\")\n"
-   "                    headers))\n"
-   "         (curl (curl-easy-init)))\n"
-   "    (dynamic-wind\n"
-   "        (lambda () #t)\n"
-   "        (lambda ()\n"
-   "          (curl-easy-setopt curl 'url url)\n"
-   "          (curl-easy-setopt curl 'customrequest (symbol->string method))\n"
-   "          (curl-easy-setopt curl 'timeout (api-client-timeout client))\n"
-   "          (curl-easy-setopt curl 'followlocation #t)\n"
-   "          (curl-easy-setopt curl 'header #t)\n"
-   "          (curl-easy-setopt\n"
-   "           curl\n"
-   "           'httpheader\n"
-   "           (append (list \"Accept: application/json\")\n"
-   "                   (if payload (list \"Content-Type: application/json\") '())\n"
-   "                   (append (map (lambda (header)\n"
-   "                                  (format #f \"~a: ~a\" (car header) (cdr header)))\n"
-   "                                given)\n"
-   "                           (map (lambda (header)\n"
-   "                                  (format #f \"~a: ~a\" (car header) (cdr header)))\n"
-   "                                (api-client-headers client)))))\n"
-   "          (when payload\n"
-   "            (curl-easy-setopt curl 'postfields payload))\n"
-   "          (let* ((raw (curl-easy-perform curl #t))\n"
-   "                 (response (read-response (open-bytevector-input-port raw)))\n"
-   "                 (response-body (read-response-body response)))\n"
-   "            (make-http-response (response-code response)\n"
-   "                                (response-headers response)\n"
-   "                                (decode-body response-body))))\n"
-   "        (lambda () (curl-easy-cleanup curl)))))\n"
-   "\n"
-   "(define (decode-body response-body)\n"
-   "  \"Return RESPONSE-BODY, a bytevector or string, as a jso value.\"\n"
-   "  (let ((text (cond\n"
-   "                ((string? response-body) response-body)\n"
-   "                ((bytevector? response-body) (utf8->string response-body))\n"
-   "                (else \"\"))))\n"
-   "    (if (string-null? (string-trim-both text))\n"
-   "        json-null\n"
-   "        (json-string->jso text))))\n"))
+BASE-URL prefixes every path.  AUTH holds the credentials, or #f to call only
+public operations; HEADERS are sent with every request; TIMEOUT is the request
+timeout in seconds."
+           (%make-api-client base-url auth headers timeout))
+        `(define (client-url client path query)
+           "Return the absolute URL of PATH, with the QUERY alist rendered."
+           (let ((base (string-trim-right (api-client-base-url client) #\/))
+                 (parameters (query-string query)))
+             (if (string-null? parameters)
+                 (string-append base path)
+                 (string-append base path "?" parameters))))))
+
+(define (guile-transport-forms)
+  "Return the forms of the @code{(web client)} transport.
+
+The body is sent as JSON and the response body is decoded as JSON, so callers
+never deal with strings; the transport is Guile's own, which is why a generated
+client needs nothing but Guile and guile-json."
+  (list `(define* (client-send client method path #:key query headers body)
+           "Send METHOD to PATH and return the <http-response>.
+
+The body is sent as JSON and the response body is decoded as JSON, so callers
+never deal with strings.  The transport is (web client) from Guile itself,
+which is why a generated client needs nothing but Guile and guile-json."
+           (let* ((url (client-url client path query))
+                  (given (if (and body (not (header-ref headers "Content-Type")))
+                             (header-set headers "Content-Type" "application/json")
+                             headers))
+                  (request-headers (append (list (cons "Accept" "application/json"))
+                                           given
+                                           (api-client-headers client)))
+                  (payload (and body (jso->json-string body))))
+             (receive (response response-body)
+                 (http-request url
+                               #:method method
+                               #:headers (guile-headers request-headers)
+                               #:body payload)
+               (make-http-response (response-code response)
+                                   (response-headers response)
+                                   (decode-body response-body)))))
+        `(define (guile-headers headers)
+           "Return HEADERS as (web client) wants them.
+
+(web client) takes symbol names and, for the headers it knows how to parse,
+already parsed values; every other header is passed through unchanged."
+           (map (lambda (header)
+                  (let ((name (string->symbol (string-downcase (car header))))
+                        (value (cdr header)))
+                    (cons name
+                          (cond
+                            ((eq? name 'content-type)
+                             (list (string->symbol value)))
+                            ((eq? name 'accept)
+                             (list (list (string->symbol value))))
+                            (else value)))))
+                headers))
+        `(define (decode-body response-body)
+           "Return RESPONSE-BODY, a string or a bytevector, as a jso value.
+
+The transport decodes a body to a string only for the content types it knows to
+be textual, so a JSON response usually arrives as bytes."
+           (let ((text (cond
+                         ((string? response-body) response-body)
+                         ((bytevector? response-body)
+                          (utf8->string response-body))
+                         (else ""))))
+             (if (string-null? (string-trim-both text))
+                 json-null
+                 (json-string->jso text))))))
+
+(define (curl-transport-forms)
+  "Return the forms of the libcurl transport.
+
+libcurl brings proxy settings, TLS and HTTP/2, and the response arrives as
+bytes, so the transport reads them and lets the generated code decode UTF-8."
+  (list `(define* (client-send client method path #:key query headers body)
+           "Send METHOD to PATH and return the <http-response>.
+
+The body is sent as JSON and the response body is decoded as JSON.  The
+transport is libcurl through guile-curl, so proxy settings, TLS and HTTP/2 are
+libcurl's; the response is read as bytes and decoded as UTF-8."
+           (let* ((url (client-url client path query))
+                  (payload (and body (jso->json-string body)))
+                  (given (if (and payload
+                                  (not (header-ref headers "Content-Type")))
+                             (header-set headers "Content-Type" "application/json")
+                             headers))
+                  (curl (curl-easy-init)))
+             (dynamic-wind
+                 (lambda () #t)
+                 (lambda ()
+                   (curl-easy-setopt curl 'url url)
+                   (curl-easy-setopt curl 'customrequest
+                                    (symbol->string method))
+                   (curl-easy-setopt curl 'timeout (api-client-timeout client))
+                   (curl-easy-setopt curl 'followlocation #t)
+                   (curl-easy-setopt curl 'header #t)
+                   (curl-easy-setopt
+                    curl
+                    'httpheader
+                    (append (list "Accept: application/json")
+                            (if payload
+                                (list "Content-Type: application/json")
+                                '())
+                            (append (map (lambda (header)
+                                           (format #f "~a: ~a"
+                                                   (car header)
+                                                   (cdr header)))
+                                         given)
+                                    (map (lambda (header)
+                                           (format #f "~a: ~a"
+                                                   (car header)
+                                                   (cdr header)))
+                                         (api-client-headers client)))))
+                   (when payload
+                     (curl-easy-setopt curl 'postfields payload))
+                   (let* ((raw (curl-easy-perform curl #t))
+                          (response (read-response
+                                     (open-bytevector-input-port raw)))
+                          (response-body (read-response-body response)))
+                     (make-http-response (response-code response)
+                                         (response-headers response)
+                                         (decode-body response-body))))
+                 (lambda () (curl-easy-cleanup curl)))))
+        `(define (decode-body response-body)
+           "Return RESPONSE-BODY, a bytevector or string, as a jso value."
+           (let ((text (cond
+                         ((string? response-body) response-body)
+                         ((bytevector? response-body)
+                          (utf8->string response-body))
+                         (else ""))))
+             (if (string-null? (string-trim-both text))
+                 json-null
+                 (json-string->jso text))))))
 
 ;;; Commentary:
 ;;; From the specification
