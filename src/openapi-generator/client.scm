@@ -245,14 +245,6 @@ table."
               (list (cons "name" (security-scheme-parameter-name scheme)))
               '())))
 
-(define (security-literal spec)
-  "Return the source of the security scheme table of @var{spec}."
-  (format #f "'~s"
-          (map (lambda (scheme)
-                 (cons (security-scheme-name scheme)
-                       (descriptor-alist scheme)))
-               (spec-security-schemes spec))))
-
 (define (operation-statuses operation)
   "Return the success statuses declared by @var{operation}, as numbers."
   (let ((response (operation-success-response operation)))
@@ -289,38 +281,38 @@ table."
   (parameters-by-location (operation-parameters operation) 'path))
 
 (define (parameter-declarations operation)
-  "Return the @code{#:key} declarations of @var{operation}."
+  "Return the @code{#:key} declarations of @var{operation}, as forms.
+
+A required parameter is a bare name and an optional one carries its default, so
+the generated procedure reads like the signature it is."
   (let* ((named (operation-parameters operation))
-         (body (operation-request-body operation))
-         (declarations
-          (append
-           (map (lambda (parameter)
-                  (if (parameter-required? parameter)
-                      (format #f "~a" (parameter-field parameter))
-                      (format #f "(~a #f)" (parameter-field parameter))))
-                named)
-           (if (not body)
-               '()
-               (if (request-body-required? body)
-                   (list "body")
-                   (list "(body #f)")))
-           (list "(auth (api-client-auth client))"))))
-    (if (null? declarations)
-        ""
-        (format #f "#:key~{ ~a~}" declarations))))
+         (body (operation-request-body operation)))
+    (append (map (lambda (parameter)
+                   (let ((field (parameter-field parameter)))
+                     (if (parameter-required? parameter)
+                         field
+                         (list field #f))))
+                 named)
+            (if (not body)
+                '()
+                (if (request-body-required? body)
+                    (list 'body)
+                    (list (list 'body #f))))
+            (list '(auth (api-client-auth client))))))
 
 (define (send-arguments ctx operation)
-  "Return the keyword arguments of the @code{client-send} call of @var{operation}."
+  "Return the keyword arguments of the @code{client-send} call of @var{operation}.
+
+Authenticated query parameters and headers are appended to the operation's own,
+so credentials and caller arguments never overwrite one another by accident."
   (let* ((query (map (lambda (parameter)
-                       (format #f "(cons ~s ~a)"
-                               (parameter-name parameter)
-                               (parameter-field parameter)))
+                       `(cons ,(parameter-name parameter)
+                              ,(parameter-field parameter)))
                      (parameters-by-location (operation-parameters operation)
                                              'query)))
          (headers (map (lambda (parameter)
-                         (format #f "(cons ~s ~a)"
-                                 (parameter-name parameter)
-                                 (parameter-field parameter)))
+                         `(cons ,(parameter-name parameter)
+                                ,(parameter-field parameter)))
                        (append (parameters-by-location
                                 (operation-parameters operation)
                                 'header)
@@ -329,32 +321,29 @@ table."
                                 'cookie))))
          (body (and (operation-request-body operation)
                     (request-shape ctx operation))))
-    (string-append
-     (if (null? query)
-         "\n                      #:query auth-query"
-         (format #f "\n                      #:query (append (list~{ ~a~}) auth-query)"
-                 query))
-     (if (null? headers)
-         "\n                      #:headers auth-headers"
-         (format #f "\n                      #:headers (append auth-headers (list~{ ~a~}))"
-                 headers))
-     (if body
-         (format #f "\n                      #:body ~a"
-                 (box-expression ctx body "body" #f))
-         ""))))
+    (append (list #:query (if (null? query)
+                              'auth-query
+                              `(append (list ,@query) auth-query))
+                  #:headers (if (null? headers)
+                                'auth-headers
+                                `(append auth-headers (list ,@headers))))
+            (if body
+                (list #:body (box-expression ctx body 'body #f))
+                '()))))
 
 (define (path-expression operation)
-  "Return the source of the request path of @var{operation}."
+  "Return the form that builds the request path of @var{operation}.
+
+A path with parameters goes through @code{params->path}, which escapes each
+value; a path without them is the literal string the specification gives."
   (let ((parameters (path-parameters operation)))
     (if (null? parameters)
-        (format #f "~s" (operation-path operation))
-        (format #f "(params->path ~s (list ~{~a~^ ~}))"
-                (operation-path operation)
-                (map (lambda (parameter)
-                       (format #f "(cons ~s ~a)"
-                               (parameter-name parameter)
-                               (parameter-field parameter)))
-                     parameters)))))
+        (operation-path operation)
+        `(params->path ,(operation-path operation)
+                       (list ,@(map (lambda (parameter)
+                                      `(cons ,(parameter-name parameter)
+                                             ,(parameter-field parameter)))
+                                    parameters))))))
 
 (define (client-docstring operation shape)
   "Return the docstring of the client procedure of @var{operation}."
@@ -366,82 +355,70 @@ table."
          (description (operation-description operation)))
      (cond
        ((and (string? description) (not (string-null? description)))
-        (format #f "~%~%~a" (string-trim-both description)))
+        (string-append "\n\n" (string-trim-both description)))
        ((and (string? summary) (not (string-null? summary)))
-        (format #f "~%~%~a" summary))
+        (string-append "\n\n" summary))
        (else "")))
    (let ((parameters (operation-parameters operation)))
      (if (null? parameters)
          ""
-         (format #f "~%~%Parameters:~%~{  - ~a~^~%~}"
-                 (map (lambda (parameter)
-                        (format #f "~a (~a~a, ~a)"
-                                (parameter-name parameter)
-                                (let ((type (schema-type
-                                             (parameter-schema parameter))))
-                                  (if type (symbol->string type) "value"))
-                                (if (parameter-required? parameter)
-                                    ", required"
-                                    "")
-                                (symbol->string
-                                 (parameter-location parameter))))
-                      parameters))))
+         (string-append
+          "\n\nParameters:\n"
+          (string-join
+           (map (lambda (parameter)
+                  (let ((type (schema-type (parameter-schema parameter))))
+                    (format #f "  - ~a (~a~a, ~a)"
+                            (parameter-name parameter)
+                            (if type (symbol->string type) "value")
+                            (if (parameter-required? parameter)
+                                ", required"
+                                "")
+                            (symbol->string
+                             (parameter-location parameter)))))
+                parameters)
+           "\n"))))
    (if (operation-request-body operation)
-       "~%~%The request body is a record, serialised as JSON."
+       "\n\nThe request body is a record, serialised as JSON."
        "")
    (format #f
-           "~%~%Returns two values: the decoded body~a and the <http-response>.~%~%Credentials come from AUTH, which defaults to the client's."
+           "\n\nReturns two values: the decoded body~a and the <http-response>.\n\nCredentials come from AUTH, which defaults to the client's."
            (if shape
                (format #f " (a ~a)" (schema-display-name shape))
                ""))))
 
-(define (operation-template ctx operation)
-  "Return the source of the client procedure of @var{operation}."
+(define (method-symbol operation)
+  "Return the HTTP method of @var{operation} as the symbol the runtime expects."
+  (string->symbol (string-upcase (symbol->string (operation-method operation)))))
+
+(define (operation-forms ctx operation)
+  "Return the forms of the client procedure of @var{operation}.
+
+Authentication comes first, because every generated procedure has to know which
+headers and query parameters the credentials add before it can build the request;
+the response is then checked against the statuses the specification declares and
+decoded as the record or collection it is."
   (let* ((name (operation-name operation))
          (shape (response-shape ctx operation))
          (statuses (operation-statuses operation))
          (security (operation-security operation))
          (decode (if shape
-                     (unbox-expression ctx shape "(http-response-body response)")
-                     "(http-response-body response)")))
-    (format #f
-            (string-append
-             "(define* (~a client ~a)\n"
-             "~a\n"
-             "  (receive (auth-headers auth-query)\n"
-             "      (authenticate auth api-security-schemes '~s)\n"
-             "    (let ((path ~a))\n"
-             "      (let ((response (client-send client '~a path~a)))\n"
-             "        (expect-status response ~a)\n"
-             "        (values ~a response)))))\n")
-            name
-            (parameter-declarations operation)
-            (docstring-lines (client-docstring operation shape) 2)
-            security
-            (path-expression operation)
-            (string-upcase (symbol->string (operation-method operation)))
-            (send-arguments ctx operation)
-            (if (null? statuses) "#f" (format #f "'~s" statuses))
-            decode)))
-
-(define (docstring-lines text indent)
-  "Return @var{text} as a Scheme docstring literal, indented by @var{indent}.
-
-The first line is indented like the code around it and the later lines start at
-the beginning of the line, which is how Guile source is normally written and
-what keeps the literal's content free of accidental indentation."
-  (let* ((lines (string-split (docstring-text text) #\newline))
-         (pad (make-string indent #\space)))
-    (string-append (format #f "~a\"~a" pad (escape-docstring (car lines)))
-                   (if (null? (cdr lines))
-                       ""
-                       (string-append (format #f "~%~{~a~^~%~}"
-                                              (map escape-docstring (cdr lines)))
-                                      "\"")))))
-
-(define (escape-docstring line)
-  "Return @var{line} escaped for a double quoted Scheme literal."
-  (escape-string line))
+                     (unbox-expression ctx shape '(http-response-body response))
+                     '(http-response-body response))))
+    (list `(define* (,name client #:key ,@(parameter-declarations operation))
+             ,(client-docstring operation shape)
+             (receive (auth-headers auth-query)
+                 (authenticate auth api-security-schemes
+                               ,(quoted security))
+               (let ((path ,(path-expression operation)))
+                 (let ((response (client-send client
+                                              ,(quoted (method-symbol operation))
+                                              path
+                                              ,@(send-arguments ctx operation))))
+                   (expect-status response
+                                  ,(if (null? statuses)
+                                       #f
+                                       (quoted statuses)))
+                   (values ,decode response))))))))
 
 ;;; Commentary:
 ;;; The module
@@ -450,7 +427,9 @@ what keeps the literal's content free of accidental indentation."
   "Return the source text of the client module of @var{spec}.
 
 The transport is chosen by @var{config}: @code{guile} for @code{(web client)}
-or @code{curl} for libcurl through guile-curl."
+or @code{curl} for libcurl through guile-curl.  The file is a list of forms —
+the header comment, the module, the security table, the record, the transport
+and one procedure per operation — rendered in one pass."
   (let* ((ctx (make-context spec config))
          (operations (spec-operations spec))
          (curl? (eq? (config-http config) 'curl))
@@ -468,67 +447,61 @@ or @code{curl} for libcurl through guile-curl."
          (base-url (or (config-base-url config)
                        (spec-base-url spec)
                        "http://localhost:8080")))
-    (code->string
-     (lambda ()
-       (emit-header
-        (list (format #f "HTTP client generated from ~a"
-                      (or (config-source config) "a specification"))
-              (format #f
-                      (string-append
-                       "Generated by guile-openapi-generator ~a, from the ~a ~a"
-                       " specification.  Do not edit this file: regenerate it"
-                       " instead.")
+    (forms->string
+     (append
+      (list (comment (format #f "HTTP client generated from ~a"
+                             (or (config-source config) "a specification")))
+            (comment
+             (string-append
+              (format #f "Generated by guile-openapi-generator ~a, from the ~a ~a specification."
                       (config-generator-version config)
                       (spec-title spec)
                       (spec-version spec))
-              (if curl?
-                  (string-append
-                   "The transport is libcurl through guile-curl; the generated"
-                   " code needs guile-curl on the load path.")
-                  (string-append
-                   "The transport is (web client) from Guile itself, so this file"
-                   " needs nothing but Guile and guile-json."))))
-       (emit-module (config-module config 'client)
-                    (append (list (config-json-module config)
-                                  (config-jso-module config)
-                                  (config-runtime-module config))
-                            (if (config-models? config)
-                                (list (config-module config 'models))
-                                '())
-                            (if curl?
-                                '((curl)
-                                  (web response)
-                                  (ice-9 iconv)
-                                  (rnrs bytevectors))
-                                '((web client)
-                                  (web response)
-                                  (web uri)
-                                  (ice-9 iconv)
-                                  (rnrs bytevectors)))
-                            '((srfi srfi-1) (srfi srfi-9) (srfi srfi-13)
-                              (ice-9 receive)))
-                    '()
-                    exports)
-       (emit-blank)
-       (emit-raw
-        ";; The security schemes of the specification, as authenticate wants them.")
-       (emit "(define api-security-schemes ~a)" (security-literal spec))
-       (emit-blank)
-       (for-each emit-raw
-                 (string-split (string-trim-right
-                                (format #f client-record-template base-url))
-                               #\newline))
-       (emit-blank)
-       (for-each emit-raw
-                 (string-split
-                  (string-trim-right
-                   (if curl?
-                       curl-send-template
-                       guile-send-template))
-                  #\newline))
-       (emit-blank)
-       (for-each (lambda (operation)
-                   (emit-raw (string-trim-right
-                              (operation-template ctx operation)))
-                   (emit-blank))
-                 operations)))))
+              "  Do not edit this file: regenerate it instead."))
+            (comment
+             (if curl?
+                 (string-append
+                  "The transport is libcurl through guile-curl; the generated"
+                  " code needs guile-curl on the load path.")
+                 (string-append
+                  "The transport is (web client) from Guile itself, so this file"
+                  " needs nothing but Guile and guile-json.")))
+            `(define-module ,(config-module config 'client)
+               #:use-module ,(config-json-module config)
+               #:use-module ,(config-jso-module config)
+               #:use-module ,(config-runtime-module config)
+               ,@(if (config-models? config)
+                     (list #:use-module (config-module config 'models))
+                     '())
+               ,@(if curl?
+                     (append-map (lambda (module) (list #:use-module module))
+                                 '((curl) (web response) (ice-9 iconv)
+                                   (rnrs bytevectors)))
+                     (append-map (lambda (module) (list #:use-module module))
+                                 '((web client) (web response) (web uri)
+                                   (ice-9 iconv) (rnrs bytevectors))))
+               #:use-module (srfi srfi-1)
+               #:use-module (srfi srfi-9)
+               #:use-module (srfi srfi-13)
+               #:use-module (ice-9 receive)
+               #:export ,exports)
+            (comment "The security schemes of the specification, as authenticate wants them.")
+            `(define api-security-schemes ,(quoted (security-table spec))))
+      (client-record-forms base-url)
+      (if curl?
+          (curl-transport-forms)
+          (guile-transport-forms))
+      (concatenate (map (lambda (operation)
+                          (operation-forms ctx operation))
+                        operations))))))
+
+(define (security-table spec)
+  "Return the security schemes of @var{spec}, in the shape of the specification.
+
+Keeping the specification's own spelling means the emitted literal can be read
+against the document it came from, and @code{authenticate} needs no translation
+table."
+  (map (lambda (scheme)
+         (cons (security-scheme-name scheme)
+               (descriptor-alist scheme)))
+       (spec-security-schemes spec)))

@@ -87,11 +87,11 @@
                                                   (birth-day #f)
                                                   (photo-urls '())
                                                   (category #f)))))))
-                 (assert-equal #:expect "(define* (make-pet"
+                 (assert-equal #:expect "(define* (make-pet #:key"
                                #:got (car output))
-                 (assert-equal #:expect "#:key"
+                 (assert-equal #:expect "id"
                                #:got (string-trim-both (cadr output))
-                               #:name "the keyword arguments start their own line")
+                               #:name "an argument sits on a line of its own")
                  (assert-equal #:expect "#f)))"
                                #:got (substring (last output)
                                                 (- (string-length (last output)) 5))

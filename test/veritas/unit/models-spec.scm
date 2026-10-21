@@ -130,8 +130,12 @@
 
          (test "A nullable member is written as null"
                (assert-true
+                (contains? polymorphic-text "(cons \"nickname\""))
+               (assert-true
                 (contains? polymorphic-text
-                           "(cons \"nickname\" (if (eq? (cat-nickname value) #f) json-null")))
+                           "(if (eq? (cat-nickname value) #f)"))
+               (assert-true
+                (contains? polymorphic-text "json-null")))
 
          (test "An absent optional member is left out"
                (assert-true (contains? polymorphic-text

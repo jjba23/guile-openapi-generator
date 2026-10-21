@@ -52,8 +52,6 @@
             blank
             blank?
             quoted
-            source
-            source?
             symbol-append
             escape-string
             scheme-string
@@ -106,15 +104,6 @@
 (define-record-type <blank>
   (blank)
   blank?)
-
-;; Source that a module still builds as text.  A tree is converted one module at a
-;; time, and this is what lets a converted module embed the output of a helper in
-;; one that is not converted yet; once every module builds forms, nothing here
-;; uses it.
-(define-record-type <source>
-  (source text)
-  source?
-  (text source-text))
 
 ;; One clause of a define-module body: the keyword and what it applies to.  The
 ;; two are separate elements of the form, but one line of output.
@@ -260,10 +249,6 @@ An improper list keeps its dot, so the association @code{(\"type\" .
 
     ((clause? form) (render-clause form column))
 
-    ((source? form)
-     (map (lambda (line) (code-line (indent-to column line)))
-          (string-split (source-text form) #\newline)))
-
     ((and (string? form) (string-index form #\newline))
      (render-multiline-string form column))
 
@@ -379,17 +364,25 @@ form, which is where a Scheme reader expects the parenthesis."
   "Return the lines of the procedure signature @code{(NAME ARGUMENTS ...)}.
 
 An argument list that does not fit is put one argument per line, lined up under
-the name, which is how a long @code{#:key} list should read."
+the name.  The @code{#:key} marker stays beside the name: it belongs to the
+signature, not to the values a caller passes."
   (let ((one-line (flat (cons name arguments))))
     (cond
       ((and one-line (fits? one-line column))
        (list (code-line (indent-to column one-line))))
       (else
-       (let ((argument-column (+ column 1 (string-length (flat name)) 1)))
-         (let loop ((rest arguments)
-                    (lines (list (code-line
-                                  (indent-to column
-                                             (string-append "(" (flat name)))))))
+       (let* ((argument-column (+ column 1 (string-length (flat name)) 1))
+              (marker (and (pair? arguments)
+                           (keyword? (car arguments))
+                           (flat (car arguments))))
+              (first-line (string-append "("
+                                         (flat name)
+                                         (if marker
+                                             (string-append " " marker)
+                                             "")))
+              (rest (if marker (cdr arguments) arguments)))
+         (let loop ((rest rest)
+                    (lines (list (code-line (indent-to column first-line)))))
            (if (null? rest)
                (last-code-line-append lines ")")
                (loop (cdr rest)
@@ -625,7 +618,7 @@ own, so @code{#:key value} pairs are never split."
                        (<= (+ (string-length current) 1 (string-length text))
                            line-width))
                   (loop (cdr rest) finished (string-append current " " text)))
-                 (text
+                 ((and text (fits? text argument-column))
                   (loop (cdr rest)
                         (cons current finished)
                         (indent-to argument-column text)))
