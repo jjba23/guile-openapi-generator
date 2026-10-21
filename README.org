@@ -1,4 +1,4 @@
-#+title: Guile OpenAPI
+#+title: Guile OpenAPI Generator
 #+author: Josep Bigorra
 #+email: jjbigorra@gmail.com
 #+language: en
