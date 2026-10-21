@@ -33,6 +33,7 @@
   #:use-module (ice-9 format)
   #:use-module (ice-9 ftw)
   #:use-module (ice-9 popen)
+  #:use-module (ice-9 string-fun)
   #:use-module (ice-9 textual-ports)
   #:use-module (ice-9 receive)
   #:use-module (srfi srfi-1)
@@ -174,13 +175,19 @@ a path would hand a later run the compiled form of an earlier one."
               (reverse names))
             (loop (cons name names)))))))
 
-(define* (run-program directory module-names program)
+(define* (run-program directory module-names program #:key (bindings '()))
   "Run the program called @var{program} against the tree in @var{directory}.
 
 @var{module-names} is the list of modules the program works in: the fixture
 programs are plain top-level code, and the module form written here is what gives
 them the generated modules, so a program never has to know which root it is
-testing."
+testing.
+
+@var{bindings} is a list of @code{(name . source)} pairs that become definitions
+in front of the program.  A test hands a value over that way rather than through
+the environment: Veritas runs each spec file in its own thread, and mutating the
+environment of a multi-threaded process has no defined meaning, so an environment
+variable would not reach the child reliably."
   (let ((body (file-contents (fixture (string-append "programs/" program ".scm")))))
     (run-generated directory
                    (string-append
@@ -197,7 +204,30 @@ testing."
                                          '(ice-9 receive))))
                       "")
                      ") ; end of module\n")
+                    (string-join
+                     (map (lambda (binding)
+                            (format #f "(define ~a ~a)\n"
+                                    (car binding)
+                                    (cdr binding)))
+                          bindings)
+                     "")
                     body))))
+
+(define (shell-quote text)
+  "Return @var{text} as a single shell word, quotes and all."
+  (string-append "'"
+                 (string-replace-substring text "'" "'\\''")
+                 "'"))
+
+(define (child-load-path directory)
+  "Return the load path a generated tree's program needs, as one string.
+
+The tests may have been started with @code{-L} flags rather than a
+@code{GUILE_LOAD_PATH} variable — @code{maak test} does exactly that — and those
+flags are not inherited by a child process.  The parent's load path is therefore
+copied into the environment of the child explicitly, with the generated tree in
+front."
+  (string-join (cons directory (remove string-null? %load-path)) ":"))
 
 (define (run-generated directory program)
   "Run @var{program}, a Scheme source string, against the tree in @var{directory}.
@@ -213,10 +243,11 @@ so nothing one test generates can be seen by another."
       (lambda (port)
         (display program port)))
     (let* ((guile (or (getenv "GUILE") "guile"))
-           (command (format #f "GUILE_AUTO_COMPILE=1 ~a -L ~a ~a 2>&1"
-                            guile
-                            directory
-                            path))
+           (command (format #f "GUILE_LOAD_PATH=~a GUILE_AUTO_COMPILE=1 ~a -L ~a ~a 2>&1"
+                            (shell-quote (child-load-path directory))
+                            (shell-quote guile)
+                            (shell-quote directory)
+                            (shell-quote path)))
            (port (open-input-pipe command))
            (output (get-string-all port)))
       (let ((status (close-pipe port)))

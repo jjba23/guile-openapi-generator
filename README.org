@@ -401,7 +401,7 @@ Everything developer-facing goes through [[https://codeberg.org/jjba23/maak][maa
 | Task          | What it does                                                  |
 |---------------+---------------------------------------------------------------|
 | `maak test`     | Run every Veritas suite                                       |
-| `maak check`    | Compile every source and test module                          |
+| `maak check`    | Compile every source and test module (generated trees and fixture programs are skipped) |
 | `maak generate` | Generate a client, controllers and models from =examples/petstore.yaml= |
 | `maak fmt`      | Format every =.scm= file with `guix style`                      |
 | `maak docs`     | Generate the HTML API documentation                            |

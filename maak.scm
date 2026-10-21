@@ -69,9 +69,19 @@
   (guile-run "((@ (veritas runner) run-tests))"))
 
 (define (check)
-  "Compile every source module to catch syntax and reference errors."
-  (time-machine-manifest-shell (list (string-append "find src test -name '*.scm'"
-                                                   " -exec guild compile -o /dev/null {} +"))))
+  "Compile every source and test module to catch syntax and reference errors.
+
+The trees the test suite generates under test/generated and the fixture programs
+in test/fixtures/programs are skipped: they are output or fragments, and they
+only make sense with a generated tree on the load path."
+  (time-machine-manifest-shell
+   (list (string-append
+          "GUILE_LOAD_PATH=./src:./test:$GUILE_LOAD_PATH "
+          "find src test -name '*.scm' "
+          "-not -path 'test/generated/*' "
+          "-not -path 'test/fixtures/programs/*' -print0 "
+          "| xargs -0 -n 1 guild compile "
+          "-o \"${TMPDIR:-/tmp}/guile-openapi-generator-check.go\""))))
 
 (define (generate)
   "Generate a client, controllers and models from the example specification."

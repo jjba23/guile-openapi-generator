@@ -1,5 +1,6 @@
 ;; The generated client builds the URL, sends the credentials and decodes JSON.
-(define base-url (getenv "BASE_URL"))
+;; BASE-URL is defined in front of this program by the test, so the fixture does
+;; not depend on the environment of the process that runs it.
 (define client (make-api-client
                 #:base-url base-url
                 #:auth (make-auth #:api-keys '(("api_key" . "secret")))))

@@ -57,9 +57,21 @@
   (emit-client (petstore-spec)
                (test-config #:root "petstore" #:http 'curl)))
 
-(define base-port 8481)
+(define base-port
+  ;; A port range derived from the process id, so a run never reuses a port that
+  ;; a previous run may still have in TIME_WAIT.
+  (+ 8600 (modulo (getpid) 400)))
 
-(define current-port (make-parameter base-port))
+(define next-port
+  ;; A plain variable rather than a parameter: parameters are per dynamic extent,
+  ;; so a test that took a port inside its own extent would hand the same port to
+  ;; the next one.
+  base-port)
+
+(define (take-port)
+  (let ((port next-port))
+    (set! next-port (+ port 1))
+    port))
 
 (define requests '())
 
@@ -93,21 +105,54 @@
       (else
        (json-response 500 "{\"message\":\"boom\"}")))))
 
+(define (port-open? port)
+  "Return @code{#t} when something accepts a connection on @var{port}."
+  (catch #t
+    (lambda ()
+      (let ((connection (socket PF_INET SOCK_STREAM 0)))
+        (connect connection
+                 (make-socket-address AF_INET
+                                      (inet-pton AF_INET "127.0.0.1")
+                                      port))
+        (close connection)
+        #t))
+    (lambda (key . arguments)
+      #f)))
+
+(define (wait-for-server port)
+  "Block until @var{port} accepts connections, or say that it never did.
+
+Polling rather than sleeping is what makes this reliable: a fixed sleep is either
+too short (a slow machine) or wasted, and when the server cannot start at all the
+failure has to name the port instead of looking like a broken client."
+  (let loop ((attempts 0))
+    (cond
+      ((port-open? port) #t)
+      ((> attempts 200)
+       (error "The test server never accepted a connection" port))
+      (else
+       (usleep 25000)
+       (loop (+ attempts 1))))))
+
 (define (with-server thunk)
-  "Start the test server on a port of its own, call THUNK, then cancel it.
+  "Start the test server on a port of its own, call THUNK with it, then cancel it.
 
 Each test gets a fresh port: a cancelled server may hold its socket for a moment,
 and a test that failed to bind would otherwise look like a client bug."
-  (let* ((port (current-port))
+  (let* ((port (take-port))
          (thread (call-with-new-thread
                   (lambda ()
                     (catch #t
                       (lambda ()
                         (run-server handler 'http (list #:port port
                                                         #:host "127.0.0.1")))
-                      (lambda (key . arguments) #f))))))
-    (current-port (+ port 1))
-    (usleep 400000)
+                      (lambda (key . arguments)
+                        (format (current-error-port)
+                                "the test server failed to start: ~a ~s~%"
+                                key
+                                arguments)
+                        #f))))))
+    (wait-for-server port)
     (dynamic-wind
       (lambda () #t)
       (lambda () (thunk port))
@@ -165,15 +210,30 @@ and a test that failed to bind would otherwise look like a client bug."
   (filter (lambda (line) (not (string-null? line)))
           (map string-trim-both (string-split output #\newline))))
 
-(define (client-program root program)
-  "Generate the petstore client as ROOT and run PROGRAM against it.
+(define (client-program root program port)
+  "Generate the petstore client as ROOT and run PROGRAM against PORT.
 
 The test server runs in this process, so the program, which runs in a child
-process, really speaks HTTP to it."
+process, really speaks HTTP to it.  The URL is handed over as a binding rather
+than as an environment variable: the spec file runs in its own thread and
+changing the environment of a multi-threaded process is undefined."
   (with-generated root
     (lambda (directory)
-      (run-program directory (list (list root 'client)
-                                     (list root 'models)) program))))
+      (run-program directory
+                   (list (list root 'client)
+                         (list root 'models))
+                   program
+                   #:bindings (list (cons 'base-url
+                                          (format #f "~s"
+                                                  (format #f "http://127.0.0.1:~a"
+                                                          port))))))))
+
+(define (request-for method path)
+  "Return the request the server recorded for METHOD and PATH, or #f."
+  (find (lambda (entry)
+          (and (eq? (car entry) method)
+               (string=? (cadr entry) path)))
+        requests))
 
 (define behaviour-suite
   (suite "Generated client against a server"
@@ -183,35 +243,32 @@ process, really speaks HTTP to it."
                (set! requests '())
                (with-server
                 (lambda (port)
-                  (setenv "BASE_URL" (format #f "http://127.0.0.1:~a" port))
-                  (let ((output (client-program 'e2e-client "client-calls")))
-                    (unsetenv "BASE_URL")
+                  (let ((output (client-program 'e2e-client "client-calls" port)))
                     (assert-equal
                      #:expect '("200" "(Rex Bella)" "Mia" "201" "Cadet" "204")
                      #:got (lines output))
-                    (let ((list-request (find (lambda (entry)
-                                                (and (eq? (car entry) 'GET)
-                                                     (string=? (cadr entry) "/pets")))
-                                              requests))
-                          (post-request (find (lambda (entry)
-                                                (eq? (car entry) 'POST))
-                                              requests)))
-                      (assert-equal #:expect "secret"
-                                    #:got (cadddr list-request))
-                      (assert-equal #:expect "limit=10"
-                                    #:got (caddr list-request))
-                      (assert-equal #:expect 'POST #:got (car post-request))
-                      (assert-equal #:expect "{\"name\":\"Cadet\"}"
-                                    #:got (utf8->string
-                                          (list-ref post-request 4))))))))
+                    (let ((list-request (request-for 'GET "/pets"))
+                          (post-request (request-for 'POST "/pets")))
+                      (assert-true (if list-request #t #f)
+                                   #:name "the server answered a GET /pets")
+                      (assert-true (if post-request #t #f)
+                                   #:name "the server answered a POST /pets")
+                      (when list-request
+                        (assert-equal #:expect "secret"
+                                      #:got (cadddr list-request))
+                        (assert-equal #:expect "limit=10"
+                                      #:got (caddr list-request)))
+                      (when post-request
+                        (assert-equal #:expect "{\"name\":\"Cadet\"}"
+                                      #:got (utf8->string
+                                            (list-ref post-request 4)))))))))
 
          (test "An undeclared status raises instead of decoding"
                (with-server
                 (lambda (port)
-                  (setenv "BASE_URL" (format #f "http://127.0.0.1:~a" port))
                   (let ((output (client-program 'e2e-client-error
-                                                "client-error")))
-                    (unsetenv "BASE_URL")
+                                                "client-error"
+                                                port)))
                     (assert-equal #:expect '("500")
                                   #:got (lines output))))))))
 
