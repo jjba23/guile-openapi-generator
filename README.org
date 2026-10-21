@@ -5,32 +5,44 @@
 #+options: toc:nil
 
 [[https://jointhefreeworld.org/ggg/dist/scheme-guile.svg]] [[https://jointhefreeworld.org/ggg/dist/gnu-guix.svg]] [[https://jointhefreeworld.org/ggg/dist/maak.svg]]
-[[https://jointhefreeworld.org/ggg/dist/license-agpl3+.svg]]    [[https://jointhefreeworld.org/ggg/dist/license-fdl13+.svg]]
+[[https://jointhefreeworld.org/ggg/dist/license-agpl3+.svg]] [[https://jointhefreeworld.org/ggg/dist/license-fdl13+.svg]]
 
-/OpenAPI 3 converter and code generator for Lisp (Guile Scheme)/
+#+begin_quote
+*Write the specification once; get Guile you would have written by hand.*
+#+end_quote
 
-Turn an OpenAPI 3.x specification — YAML or JSON — into Guile Scheme you would
-have written by hand: records that validate themselves, a controller with a route
-table and a dispatcher, and an HTTP client whose procedures take and return
+Turn an OpenAPI 3.x specification — YAML or JSON — into Guile Scheme that reads
+like a person wrote it: records that validate themselves, a controller with a
+route table and a dispatcher, and an HTTP client whose procedures take and return
 records rather than strings.
 
-If you like my work, please support me by [[https://bmc.link/jjbigorra][buying me a cup of coffee ☕]] so I can continue with a lot of motivation.
+It is for Guile developers who have an API description and would rather not
+hand-write a hundred accessors, converters and status checks; and for teams that
+want the boring, error-prone half of an API client generated, while the
+interesting half stays ordinary Scheme they can read, edit and debug.
 
----------------
+If you like my work, please support me by [[https://bmc.link/jjbigorra][buying me a cup of coffee ☕]] so I can
+continue with a lot of motivation.
 
 * At a glance
 
-| You want…                                  | You get…                                                            |
-|--------------------------------------------+---------------------------------------------------------------------|
-| Data models from the schemas               | records, a keyword constructor that validates, `->jso` / `jso->` converters |
-| A server for the paths                     | a route table, a dispatcher, and one procedure per operation         |
-| To keep using Artanis                      | an adapter that registers every route, if you ask for it             |
-| An HTTP client                             | one procedure per operation, plain Guile or libcurl                  |
-| Composition and unions                     | `allOf` flattened into one record, `oneOf`/`anyOf` with discriminator dispatch |
-| Enumerations                               | value lists, constants and predicates                                |
-| JSON merge patch (RFC 7386)                | a `…-apply-patch` procedure per record, and `json-merge-patch` in the runtime |
-| Auth                                       | API key, HTTP basic, bearer, OAuth2 and OpenID Connect, as data      |
-| A tree you can vendor                      | `--self-contained`, which copies the runtime next to the generated code |
+Five seconds, one table:
+
+| You have…                        | You want…                            | You get…                                                             |
+|----------------------------------+--------------------------------------+----------------------------------------------------------------------|
+| a schema                         | data models                          | records, a keyword constructor that validates, `->jso` / `jso->` converters |
+| paths and operations             | a server                             | a route table, a dispatcher, and one procedure per operation           |
+| an existing Artanis app          | routes registered for you            | an adapter that registers every route, if you ask for it              |
+| a remote API                     | a client                             | one procedure per operation, plain Guile or libcurl                   |
+| a tool that vendors its deps     | a tree that needs nothing else       | `--self-contained`, which copies the runtime next to the code          |
+
+#+begin_src scheme
+;; The whole idea, in four lines:
+(define rex (make-pet #:id 7 #:name "Rex" #:status "sold"))
+(pet-name rex)                     ;; => "Rex"
+(pet->jso rex)                     ;; => (("id" . 7) ("name" . "Rex") ("status" . "sold"))
+(pet-valid? rex)                   ;; => #t
+#+end_src
 
 * Features
 
@@ -57,13 +69,19 @@ If you like my work, please support me by [[https://bmc.link/jjbigorra][buying m
 - *Auth from the specification.* The security schemes become a literal alist, each
   operation carries the requirements that authorise it, and `authenticate` turns
   an `<auth>` into the headers and query parameters that express it.
+- *JSON merge patch (RFC 7386) built in.* Every record has an `…-apply-patch`
+  procedure, and the runtime ships `json-merge-patch` for plain data.
 - *Generated code you can read.* Docstrings, kebab-case names, aligned argument
   lists, and a header saying where the file came from. The tests assert on the
-  text as well as on the behaviour, because a generated file is also documentation.
+  text as well as on the behaviour, because a generated file is also
+  documentation.
+- *Generated by building code, not by gluing strings.* The emitters construct
+  s-expressions with quasiquote and a small renderer decides indentation, line
+  breaks and wrapping — so a generator reads like the code it writes.
 
 * Install
 
-** With Guix
+** With Guix (recommended)
 
 From this repository, which packages the working tree:
 
@@ -79,19 +97,40 @@ guile-curl, Veritas and the documentation tooling:
 guix shell -m manifest.scm -- guile -L ./src -c '(use-modules (openapi-generator))'
 #+end_src
 
+Everything is pinned, so a local run and a CI run resolve the same packages:
+
+#+begin_src shell
+guix time-machine --channels=channels.scm -- shell -m manifest.scm -- \
+  guile -L ./src -c '(use-modules (openapi-generator))'
+#+end_src
+
+** With any Guile
+
+Any Guile 3.0 with guile-json on the load path is enough. The generator is a
+library first and a command second, so nothing has to be installed at all:
+
+#+begin_src shell
+git clone https://codeberg.org/jjba23/guile-openapi-generator
+cd guile-openapi-generator
+guile -L ./src -c '(use-modules (openapi-generator))'
+#+end_src
+
 ** Requirements
 
-| Requirement      | Version | Notes                                                   |
-|------------------+---------+---------------------------------------------------------|
-| GNU Guile        | 3.0+    | The generator and the generated code                    |
-| guile-json       | 4.x     | JSON reading and writing, in the generator and at run time |
-| guile-curl       | 0.9     | Only for generated libcurl clients                      |
-| Artanis          | 1.x     | Only for generated Artanis adapters                     |
-| Veritas          | 0.7+    | Only for this project's tests                           |
+| Requirement   | Version | Needed for                                              |
+|---------------+---------+---------------------------------------------------------|
+| GNU Guile     | 3.0+    | the generator and everything it generates                |
+| guile-json    | 4.x     | JSON reading and writing, in the generator and at run time |
+| guile-curl    | 0.9     | generated libcurl clients only                           |
+| Artanis       | 1.x     | generated Artanis adapters only                          |
+| Veritas       | 0.7+    | this project's tests only                                |
+| maak          | any     | the developer tasks (=maak test=, =maak check=, …)        |
 
 * Quick start
 
-** Generate
+Sixty seconds from a specification to running code.
+
+** 1. Generate
 
 #+begin_src shell
 guile -L ./src -c '((@ (openapi-generator cli) main)
@@ -106,7 +145,7 @@ gen/petstore/models.scm        records, validations, converters
 gen/petstore/controllers.scm   route table and dispatcher
 gen/petstore/client.scm        one procedure per operation
 gen/petstore/README.org        what was generated, and how to use it
-@end example
+#+end_example
 
 Ask for an Artanis adapter and a libcurl client with two flags:
 
@@ -117,7 +156,7 @@ guile -L ./src -c '((@ (openapi-generator cli) main)
                           "--controllers" "artanis" "--http" "curl"))'
 #+end_src
 
-** Models
+** 2. Use the models
 
 #+begin_src scheme
 (use-modules (petstore models))
@@ -137,7 +176,7 @@ guile -L ./src -c '((@ (openapi-generator cli) main)
 ;; => (pet name): must be at least 1 characters long
 #+end_src
 
-** A client
+** 3. Call the API
 
 #+begin_src scheme
 (use-modules (petstore client)
@@ -152,7 +191,7 @@ guile -L ./src -c '((@ (openapi-generator cli) main)
   (map pet-name pets))          ; two values: the decoded body and the response
 #+end_src
 
-** A server
+** 4. Serve it
 
 #+begin_src scheme
 (use-modules (petstore controllers)
@@ -190,10 +229,47 @@ Usage: openapi-generator generate --input SPEC --output DIR [options]
   --no-models                   Generate no record module.
   --base-url VALUE              Override the first server URL of the specification.
   --self-contained              Copy the runtime modules next to the generated code.
-@end example
+#+end_example
 
 An unknown value is an error rather than a silent fallback: a typo in
 =--controllers artanis= should not leave you with a plain Guile server.
+
+** From Scheme instead
+
+Every flag has a keyword argument, and the same run is a function call:
+
+#+begin_src scheme
+(use-modules (openapi-generator))
+
+;; Returns ((models . "gen/petstore/models.scm")
+;;          (controllers . "gen/petstore/controllers.scm")
+;;          (client . "gen/petstore/client.scm")
+;;          (readme . "gen/petstore/README.org"))
+(generate-from-file "examples/petstore.yaml"
+                    #:output "gen"
+                    #:module "petstore"
+                    #:controllers 'artanis
+                    #:http 'curl
+                    #:base-url "https://staging.example.com/v1"
+                    #:self-contained? #t)
+
+;; A document already in memory works the same way:
+(generate-from-string yaml-text #:output "gen")
+(generate #:document document #:output "gen" #:models? #f)
+#+end_src
+
+| Keyword            | Default      | Meaning                                                    |
+|--------------------+--------------+------------------------------------------------------------|
+| =#:document=        | —            | a parsed specification (exactly one of this and =#:input=)  |
+| =#:input=           | —            | the file to read (.yaml or .json)                          |
+| =#:output=          | ="generated"= | where the files go                                         |
+| =#:module=          | the API title | the root module name                                      |
+| =#:controllers=     | ='vanilla=    | =vanilla=, =artanis= or =none=                              |
+| =#:http=            | ='guile=      | =guile=, =curl= or =none=                                   |
+| =#:models?=         | =#t=         | generate the record module                                 |
+| =#:base-url=        | the first server | override the URL the client defaults to                |
+| =#:self-contained?= | =#f=         | copy the runtime next to the generated code                |
+| =#:validate?=       | =#t=         | validate the specification before generating               |
 
 * What gets generated
 
@@ -292,6 +368,24 @@ Returns two values: the decoded body (a Pet) and the <http-response>."
 `expect-status` is what makes an undeclared status an error: a `500` is not
 decoded into a record and quietly returned.
 
+** A tree you can vendor
+
+With =--self-contained=, the three runtime modules are copied next to the
+generated code and the generated =define-module= forms are rewritten to import
+the copies:
+
+#+begin_example
+gen/petstore/models.scm
+gen/petstore/controllers.scm
+gen/petstore/client.scm
+gen/petstore/jso.scm
+gen/petstore/runtime.scm
+gen/petstore/json.scm
+#+end_example
+
+The directory then loads with nothing but its own path and guile-json — which is
+what a test asserts, rather than assuming it.
+
 * Authentication
 
 The specification describes credentials as security schemes; an operation lists
@@ -314,6 +408,10 @@ parameters that express them. Credentials that satisfy nothing raise
 `openapi-auth-error`, because calling a secured operation anonymously is a
 programming error, not something the server should be told about.
 
+API key in the header, in the query, or in a cookie; HTTP basic; bearer tokens;
+OAuth2 and OpenID Connect — all of them are described by the same table, so a
+specification that mixes them needs no special cases.
+
 * JSON merge patch
 
 Every record has `(pet-apply-patch value patch)`; the runtime exports
@@ -330,15 +428,19 @@ The distinction the implementation depends on is that null is a *value* while an
 absent member has no value at all. The reader keeps them apart: `json-null` is
 the symbol `null`, which is also what guile-json reads and writes for null.
 
+A patch is applied to the data and the result is read back through the
+constructor, so a patch that would leave a record invalid raises like any other
+bad value.
+
 * Errors
 
-| Key                          | Raised by                                       |
-|------------------------------+-------------------------------------------------|
-| `openapi-validation-error`    | a constructor or `validate-…`, with `(path message)` |
-| `openapi-auth-error`          | `authenticate`, when no requirement is satisfiable |
-| `openapi-not-implemented`     | a controller route whose operation has no handler |
-| `openapi-no-route`            | the dispatcher, when no route matches           |
-| `openapi-http-error`          | `expect-status`, with `(status body)`           |
+| Key                       | Raised by                                            |
+|---------------------------+------------------------------------------------------|
+| `openapi-validation-error` | a constructor or `validate-…`, with `(path message)`  |
+| `openapi-auth-error`       | `authenticate`, when no requirement is satisfiable    |
+| `openapi-not-implemented`  | a controller route whose operation has no handler     |
+| `openapi-no-route`         | the dispatcher, when no route matches                 |
+| `openapi-http-error`       | `expect-status`, with `(status body)`                 |
 
 #+begin_src scheme
 (catch 'openapi-validation-error
@@ -347,22 +449,29 @@ the symbol `null`, which is also what guile-json reads and writes for null.
     (format (current-error-port) "~a: ~a~%" path message)))
 #+end_src
 
+Reading fails early and says what it was looking at: a document that is not
+OpenAPI 3.x, a missing =openapi= member, or a YAML tab used for indentation is
+reported as such, before a single line of code is generated.
+
 * Naming
 
 Specifications are written for other languages; Guile code is kebab-case.
 
-| Specification                | Guile                                    |
-|------------------------------+------------------------------------------|
-| `Pet`, `NewPet`               | `<pet>`, `pet?`, `make-pet`, `pet-name`  |
-| `/pets/{petId}`, `getPetById` | `get-pet-by-id` (method and path when there is no `operationId`) |
-| `pet_photo_urls`, `PetPhotoUrls` | `pet-photo-urls`                      |
-| a property called `else`      | `else-field` (a Scheme keyword gains a suffix) |
-| `PetStatus` (enum)            | `pet-status-values`, `pet-status-sold`   |
+| Specification                   | Guile                                                          |
+|---------------------------------+----------------------------------------------------------------|
+| `Pet`, `NewPet`                  | `<pet>`, `pet?`, `make-pet`, `pet-name`                          |
+| `/pets/{petId}`, `getPetById`     | `get-pet-by-id` (method and path when there is no `operationId`)  |
+| `pet_photo_urls`, `PetPhotoUrls`  | `pet-photo-urls`                                                 |
+| a property called `else`         | `else-field` (a Scheme keyword gains a suffix)                   |
+| `PetStatus` (enum)               | `pet-status-values`, `pet-status-sold`                           |
 
 `HTTPResponse` becomes `http-response`: a run of capitals is one word, not a
 letter-by-letter identifier.
 
 * Development
+
+Contributions of every size are welcome — a typo fix, a fixture specification
+that trips the generator, or a whole feature. Nothing here is precious.
 
 ** Repository layout
 
@@ -378,14 +487,15 @@ guile-openapi-generator/
 │   ├── schema.scm        what a schema means: records, enums, unions, maps
 │   ├── naming.scm        specification names -> Scheme names
 │   ├── config.scm        what a generation run is configured with
-│   ├── emitter.scm       the code writer every generator uses
+│   ├── code.scm          the code writer: forms in, indented Scheme out
+│   ├── emitter.scm       the older writer, still used by the controllers module
 │   ├── models.scm        the models module
 │   ├── controllers.scm   the controllers module and the Artanis adapter
 │   ├── client.scm        the HTTP client, plain Guile or libcurl
 │   ├── generator.scm     the driver: read, generate, write
 │   ├── runtime.scm       what generated code links against
 │   └── cli.scm           the command line
-├── test/veritas/unit/    the Veritas suites
+├── test/veritas/unit/    the Veritas suites, one per module
 ├── test/fixtures/        specifications and the programs the tests run
 ├── examples/             a petstore-like specification
 ├── channels.scm          the pinned Guix revision
@@ -394,35 +504,61 @@ guile-openapi-generator/
 └── maak.scm              the developer tasks
 #+end_example
 
+** How the generator is written
+
+Generated code is *data*, not text. Every emitter builds the s-expressions it
+wants with quasiquote and hands them to `(openapi-generator code)`, which decides
+indentation, where a line breaks, how arguments line up, and how a docstring is
+quoted:
+
+#+begin_src scheme
+;; src/openapi-generator/client.scm — one operation, as a form
+`(define* (,name client #:key ,@(parameter-declarations operation))
+   ,(client-docstring operation shape)
+   (receive (auth-headers auth-query)
+       (authenticate auth api-security-schemes ,(quoted security))
+     (let ((path ,(path-expression operation)))
+       (let ((response (client-send client ,(quoted method) path
+                                    ,@(send-arguments ctx operation))))
+         (expect-status response ,(quoted statuses))
+         (values ,decode response)))))
+#+end_src
+
+If you are adding a generator, add forms; if you need a new layout rule, add it
+to `code.scm` with a test in =test/veritas/unit/code-spec.scm= so every module
+benefits from it.
+
 ** Tasks
 
 Everything developer-facing goes through [[https://codeberg.org/jjba23/maak][maak]] and the pinned environment:
 
-| Task          | What it does                                                  |
-|---------------+---------------------------------------------------------------|
-| `maak test`     | Run every Veritas suite                                       |
-| `maak check`    | Compile every source and test module (generated trees and fixture programs are skipped) |
-| `maak generate` | Generate a client, controllers and models from =examples/petstore.yaml= |
-| `maak fmt`      | Format every =.scm= file with `guix style`                      |
-| `maak docs`     | Generate the HTML API documentation                            |
-| `maak dev`      | Re-run the tests whenever a source, fixture or spec changes    |
-| `maak`          | List all tasks                                                |
+| Task            | What it does                                                  |
+|-----------------+---------------------------------------------------------------|
+| =maak test=       | Run every Veritas suite                                       |
+| =maak check=      | Compile every source and test module (generated trees and fixture programs are skipped) |
+| =maak generate=   | Generate a client, controllers and models from =examples/petstore.yaml= |
+| =maak fmt=        | Format every =.scm= file with `guix style`                      |
+| =maak docs=       | Generate the HTML API documentation                            |
+| =maak dev=        | Re-run the tests whenever a source, fixture or spec changes    |
+| =maak clean=      | Remove generated artefacts                                     |
+| =maak=            | List all tasks                                                |
 
 Without maak, the tests are one command:
 
 #+begin_src shell
-guile -L ./src -L ./test -c '((@ (veritas runner) run-tests))'
+guix shell guile guile-json guile-curl guile-fibers -- \
+  guile -L ./src -L ./test -c '((@ (veritas runner) run-tests))'
 #+end_src
 
 ** Tests
 
-Eleven Veritas suites, 348 assertions. Three layers:
+Twelve Veritas suites, well over three hundred assertions, in three layers:
 
 - *Reading*: the YAML reader (scalars, collections, block scalars, anchors,
   markers), the value representation and merge patch, format detection, and the
   specification model.
-- *Meaning*: names, the schema IR (composition, unions, enumerability, nullability),
-  and the runtime the generated code calls.
+- *Meaning*: names, the schema IR (composition, unions, enumerability,
+  nullability), and the runtime the generated code calls.
 - *Generated code*: the text of what is emitted, and then the real thing — each
   suite generates a tree into =test/generated/…=, runs a small program against it
   in a fresh Guile process, and asserts on what it printed. That is how the tests
@@ -432,6 +568,33 @@ Eleven Veritas suites, 348 assertions. Three layers:
 
 The generated trees are left in place, because a failing test should be
 inspectable; they are git-ignored.
+
+Because the renderer is shared, a layout change is worth its own test in
+=code-spec.scm=: it is the one place where "the generated code looks right" is
+decided.
+
+** Contributing
+
+The short version:
+
+1. Fork, branch, and make one change that does one thing.
+2. Add a test. If the change is about a specification feature, add a fixture that
+   uses it — the fixtures double as documentation of what is supported.
+3. Run =maak test= and =maak check=.
+4. Open a pull request that says *why*, not just *what*.
+
+Good first contributions:
+
+- a specification that the generator reads but generates badly — attach the
+  smallest fragment that shows it;
+- a fixture under =test/fixtures/= for an OpenAPI feature that is not covered;
+- a language server or editor integration that uses the library;
+- documentation: an example of a real API you generated a client for.
+
+Bug reports are most useful with the specification, the command you ran, and what
+came out; the generated tree is inspectable on purpose, so please attach it.
+Patches are reviewed on the merits, and reviews are kind — see the AI policy
+below for how changes are expected to be understood by a human.
 
 * AI policy
 
