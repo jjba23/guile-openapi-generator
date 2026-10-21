@@ -1,0 +1,41 @@
+# A document that exercises the reader rather than the generator.
+title: YAML features
+quoted: "a: colon, \"quote\" and \n newline"
+single: 'it''s fine'
+literal: |
+  first line
+  second line
+folded: >-
+  one two
+  three
+
+  four
+flow:
+  list: [1, 2.5, true, null, "text"]
+  map: {a: 1, b: [2, 3], c: {d: 4}}
+anchors:
+  base: &base
+    shared: yes
+    count: 2
+  copy: *base
+  merged:
+    <<: *base
+    count: 3
+sequence:
+  - name: first
+    values: [1, 2]
+  - name: second
+    values:
+      - 3
+      - 4
+numbers:
+  integer: 42
+  negative: -7
+  float: 3.5
+  exponent: 1e3
+  hex: 0x1f
+booleans:
+  yes_value: true
+  no_value: false
+empty_value:
+inline-sequence: [a, b, c]

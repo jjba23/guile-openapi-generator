@@ -2,4 +2,8 @@ dist/
 .nrepl-port
 doc/
 result
-result/
+reports/
+*.log
+
+# generated trees used by the test suite
+test/generated/

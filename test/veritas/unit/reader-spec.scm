@@ -1,0 +1,106 @@
+;; guile-openapi-generator
+
+;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
+
+;; guile-openapi-generator is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU Affero General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; guile-openapi-generator is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU Affero General Public License for more details.
+
+;; You should have received a copy of the GNU Affero General Public License
+;; along with guile-openapi-generator.  If not, see <https://www.gnu.org/licenses/>.
+
+;;; Commentary:
+;;
+;; Reading a specification: format detection, the two parsers agreeing, and the
+;; errors a user is most likely to hit — a Swagger 2.0 document, or something
+;; that is not an OpenAPI document at all.
+
+(define-module (veritas unit reader-spec)
+  #:declarative? #t
+  #:use-module (veritas veritas)
+  #:use-module (srfi srfi-1)
+  #:use-module (openapi-generator jso)
+  #:use-module (openapi-generator reader)
+  #:use-module (openapi-support)
+  #:export (spec))
+
+(define format-suite
+  (suite "Format detection"
+         (test "A file name decides"
+               (assert-eq #:expect 'json #:got (detect-format "api.json"))
+               (assert-eq #:expect 'yaml #:got (detect-format "api.yaml"))
+               (assert-eq #:expect 'yaml #:got (detect-format "api.yml")))
+
+         (test "Content decides when the name does not"
+               (assert-eq #:expect 'json
+                          #:got (detect-format "{\"openapi\": \"3.0.0\"}"))
+               (assert-eq #:expect 'yaml
+                          #:got (detect-format "openapi: 3.0.0")))
+
+         (test "An unknown extension falls back to YAML"
+               (assert-eq #:expect 'yaml #:got (detect-format "api.txt")))))
+
+(define parse-suite
+  (suite "Parsing"
+         (test "YAML and JSON versions of the same document agree"
+               (let ((yaml (read-spec-file (fixture "mini.yaml")))
+                     (json (read-spec-file (fixture "mini.json"))))
+                 (assert-equal #:expect (jso-ref yaml "openapi")
+                               #:got (jso-ref json "openapi"))
+                 (assert-equal #:expect "object"
+                               #:got (jso-ref-path json "components" "schemas"
+                                                   "Thing" "type"))
+                 (assert-equal #:expect
+                               (jso-ref-path yaml "components" "schemas"
+                                             "Thing" "required")
+                               #:got (jso-ref-path json "components" "schemas"
+                                                   "Thing" "required"))
+                 (assert-equal #:expect #t
+                               #:got (jso-true?
+                                      (jso-ref-path json
+                                                    "components" "schemas"
+                                                    "Thing" "properties"
+                                                    "notes" "nullable")))))
+
+         (test "A string is read the same way"
+               (let ((document (read-spec-string "openapi: 3.0.3\ninfo: {title: X}\n")))
+                 (assert-equal #:expect "3.0.3"
+                               #:got (openapi-version document))))
+
+         (test "read-spec accepts a path and a document"
+               (assert-equal #:expect "Mini"
+                             #:got (document-title
+                                    (read-spec (fixture "mini.yaml"))))
+               (assert-equal #:expect "Mini"
+                             #:got (document-title
+                                    (read-spec "{\"openapi\": \"3.0.0\", \"info\": {\"title\": \"Mini\"}}"))))))
+
+(define validation-suite
+  (suite "Validation"
+         (test "A Swagger 2.0 document is refused with its version"
+               (assert-error (lambda ()
+                               (read-spec-file (fixture "swagger2.yaml")))
+                             #:name "Swagger is not OpenAPI 3"))
+
+         (test "A document without an openapi member is refused"
+               (assert-error (lambda ()
+                               (read-spec-string "{\"info\": {\"title\": \"X\"}}"))))
+
+         (test "An unknown major version is refused"
+               (assert-error (lambda ()
+                               (read-spec-string "openapi: 4.0.0\n"))))
+
+         (test "3.x is accepted"
+               (assert-true (supported-version? "3.0.3"))
+               (assert-true (supported-version? "3.1.0"))
+               (assert-false (supported-version? "2.0"))
+               (assert-false (supported-version? #f)))))
+
+(define (spec)
+  (veritas-run format-suite parse-suite validation-suite))

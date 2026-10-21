@@ -1,0 +1,258 @@
+# title: Polymorphic pet API
+# options: toc:nil
+
+# A fixture for the generator's own tests: inheritance with allOf, a
+# discriminated union with oneOf, enumerations, nullable members, formats, a
+# map, and every security scheme the specification defines.
+
+openapi: 3.1.0
+info:
+  title: Polymorphic Pets
+  version: 2.1.0
+  description: >
+    An API whose schemas exercise the parts of OpenAPI that code generators
+    usually get wrong: composition, unions with a discriminator, nullable
+    members and enumerations.
+servers:
+  - url: https://pets.example.com/api/v2
+    description: Production
+  - url: http://localhost:8080
+    description: Tinkering
+security:
+  - api_key: []
+paths:
+  /animals:
+    get:
+      operationId: listAnimals
+      summary: List every animal
+      tags: [animals]
+      parameters:
+        - name: limit
+          in: query
+          description: How many animals to return
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: x-request-id
+          in: header
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The animals
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Animal'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    post:
+      operationId: createAnimal
+      summary: Create an animal
+      security:
+        - oauth2: [write:animals]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewAnimal'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Animal'
+  /animals/{animalId}:
+    parameters:
+      - name: animalId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getAnimal
+      responses:
+        '200':
+          description: One animal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Animal'
+        '404':
+          description: No such animal
+    delete:
+      operationId: deleteAnimal
+      security: []
+      responses:
+        '204':
+          description: Deleted
+components:
+  responses:
+    ErrorResponse:
+      description: Something went wrong
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  securitySchemes:
+    api_key:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    basic_auth:
+      type: http
+      scheme: basic
+    bearer_auth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    oauth2:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.example.com/token
+          scopes:
+            write:animals: Create and change animals
+    open_id:
+      type: openIdConnect
+      openIdConnectUrl: https://auth.example.com/.well-known/openid-configuration
+  schemas:
+    Animal:
+      oneOf:
+        - $ref: '#/components/schemas/Cat'
+        - $ref: '#/components/schemas/Dog'
+        - $ref: '#/components/schemas/Fish'
+      discriminator:
+        propertyName: kind
+        mapping:
+          cat: '#/components/schemas/Cat'
+          dog: '#/components/schemas/Dog'
+          fish: '#/components/schemas/Fish'
+    Pet:
+      type: object
+      description: The members every animal has
+      required: [kind, name]
+      properties:
+        kind:
+          type: string
+        name:
+          type: string
+          minLength: 1
+          maxLength: 40
+        born:
+          type: string
+          format: date-time
+        age:
+          type: integer
+          format: int64
+          minimum: 0
+          exclusiveMaximum: 200
+        weight:
+          type: number
+          format: double
+          multipleOf: 0.1
+        nickname:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          maxItems: 8
+          uniqueItems: true
+        owner:
+          $ref: '#/components/schemas/Owner'
+        extra:
+          type: object
+          additionalProperties:
+            type: string
+    Owner:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        website:
+          type: string
+          format: uri
+    Cat:
+      allOf:
+        - $ref: '#/components/schemas/Pet'
+        - type: object
+          required: [indoor]
+          properties:
+            indoor:
+              type: boolean
+            lives:
+              type: integer
+              minimum: 1
+              maximum: 9
+    Dog:
+      allOf:
+        - $ref: '#/components/schemas/Pet'
+        - type: object
+          properties:
+            breed:
+              type: string
+              enum: [labrador, poodle, stray]
+            goodBoy:
+              type: boolean
+    Fish:
+      allOf:
+        - $ref: '#/components/schemas/Pet'
+        - type: object
+          required: [water]
+          properties:
+            water:
+              type: string
+              enum: [fresh, salt]
+            litres:
+              type: number
+    NewAnimal:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        kind:
+          type: string
+          enum: [cat, dog, fish]
+    Problem:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: integer
+        message:
+          type: string
+        details:
+          type: array
+          items:
+            type: string
+    StringMap:
+      type: object
+      additionalProperties:
+        type: string
+    NameList:
+      type: array
+      items:
+        type: string
+        minLength: 1
+    Email:
+      type: string
+      format: email
+      pattern: '^[^@]+@[^@]+\.[^@]+$'
