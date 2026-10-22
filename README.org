@@ -3,7 +3,7 @@
 #+author: Josep Bigorra
 #+email: jjbigorra@gmail.com
 #+language: en
-#+options: toc:t
+#+options: toc:nil
 
 [[https://jointhefreeworld.org/ggg/dist/scheme-guile.svg]] [[https://jointhefreeworld.org/ggg/dist/gnu-guix.svg]] [[https://jointhefreeworld.org/ggg/dist/maak.svg]]
 [[https://jointhefreeworld.org/ggg/dist/license-agpl3+.svg]] [[https://jointhefreeworld.org/ggg/dist/license-fdl13+.svg]]
@@ -55,6 +55,9 @@ continue with a lot of motivation.
 (pet->jso rex)                     ;; => (("id" . 7) ("name" . "Rex") ("status" . "sold"))
 (pet-valid? rex)                   ;; => #t
 #+end_src
+
+
+#+TOC: headlines 1
 
 ** Choose your path
 
