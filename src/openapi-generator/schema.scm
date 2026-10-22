@@ -281,32 +281,81 @@ ones.  The @code{exclude-read-only}, @code{exclude-write-only} and
   (memq (registry-policy registry)
         '(all response exclude-read-only exclude-write-only exclude-both)))
 
+(define (registry-fresh-name registry base)
+  "Return BASE, or BASE-2 and so on when its identifier is already generated.
+
+The registry holds specification names for components (@code{SignInResponse})
+and generated kebab-case names for inline models (@code{sign-in-response});
+comparing the identifiers, not the raw strings, is what keeps those two from
+colliding in the generated module."
+  (let loop ((candidate base) (counter 2))
+    (let ((candidate-identifier (identifier candidate)))
+      (if (find (lambda (entry)
+                  (string=? (identifier (car entry)) candidate-identifier))
+                (registry-names registry))
+          (loop (format #f "~a-~a" base counter) (+ counter 1))
+          candidate))))
+
+(define (register-schema! registry base node)
+  "Register NODE under BASE, or return the name it already has."
+  (or (registry-name registry node)
+      (registry-register! registry (registry-fresh-name registry base) node)))
+
+(define (media-type-name-suffix media-type)
+  "Return a short, stable suffix for MEDIA-TYPE."
+  (case (media-type-kind media-type)
+    ((json) "json")
+    ((text) "text")
+    ((form) "form")
+    ((multipart) "multipart")
+    (else "binary")))
+
 (define (register-operation! registry operation model-suffix)
   (let ((name (symbol->string (operation-name operation))))
     (when (registry-includes-requests? registry)
-      (let ((media-type (operation-request-media-type operation)))
-        (when (and media-type (inline-object? (media-type-schema media-type)))
-          (registry-register! registry
-                              (model-name (string-append name "-request")
-                                          model-suffix)
-                              (media-type-schema media-type)))))
+      (let ((body (operation-request-body operation))
+            (preferred (operation-request-media-type operation)))
+        (when body
+          (for-each
+           (lambda (media-type)
+             (let ((schema (media-type-schema media-type)))
+               (when (inline-object? schema)
+                 (register-schema!
+                  registry
+                  (model-name
+                   (string-append
+                    name "-request"
+                    (if (eq? media-type preferred)
+                        ""
+                        (string-append "-"
+                                       (media-type-name-suffix media-type))))
+                   model-suffix)
+                  schema))))
+           (request-body-media-types body)))))
     (when (registry-includes-responses? registry)
       (for-each (lambda (response)
-                  (for-each (lambda (media-type)
-                              (let ((schema (media-type-schema media-type)))
-                                (when (inline-object? schema)
-                                  (registry-register!
-                                   registry
-                                   (model-name
-                                    (if (member (response-status response)
-                                                '("200" "default"))
-                                        (string-append name "-response")
-                                        (string-append name "-"
-                                                       (response-status response)
-                                                       "-response"))
-                                    model-suffix)
-                                   schema))))
-                            (response-media-types response)))
+                  (let ((base (if (member (response-status response)
+                                          '("200" "default"))
+                                  (string-append name "-response")
+                                  (string-append name "-"
+                                                 (response-status response)
+                                                 "-response")))
+                        (first? #t))
+                    (for-each (lambda (media-type)
+                                (let ((schema (media-type-schema media-type)))
+                                  (when (inline-object? schema)
+                                    (register-schema!
+                                     registry
+                                     (model-name
+                                      (if first?
+                                          base
+                                          (string-append
+                                           base "-"
+                                           (media-type-name-suffix media-type)))
+                                      model-suffix)
+                                     schema)
+                                    (set! first? #f))))
+                              (response-media-types response))))
                 (operation-responses operation)))
     (when (registry-includes-requests? registry)
       (for-each (lambda (parameter)
@@ -397,9 +446,18 @@ ones.  The @code{exclude-read-only}, @code{exclude-write-only} and
         (jso-ref resolved "allOf"))))
 
 (define (schema-enum-values document node)
-  "Return the enumeration values of @var{node}, or #f when it has none."
-  (let ((values (jso-ref (resolve-ref document node) "enum")))
-    (and (vector? values) (vector->list values))))
+  "Return the enumeration values of @var{node}, or #f when it has none.
+
+OpenAPI 3.1's @code{const} is a one-value enumeration: a schema that accepts
+exactly that value.  Treating it as an enumeration gives it the same generated
+predicate and constants as an explicit one-value @code{enum}."
+  (let ((resolved (resolve-ref document node)))
+    (cond
+      ((vector? (jso-ref resolved "enum"))
+       (vector->list (jso-ref resolved "enum")))
+      ((jso-has? resolved "const")
+       (list (jso-ref resolved "const")))
+      (else #f))))
 
 ;;; Commentary:
 ;;; Building shapes

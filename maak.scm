@@ -92,7 +92,7 @@ would otherwise run without src/ and test/ on its path."
   (delete-file-recursively example-output)
   (mkdir-p example-output)
   (time-machine-manifest-shell
-   (list (~ "guile -L ./src -c '((@ (openapi-generator cli) main) (list"
+   (list (~ "guile -L ./src -c '((@ (openapi-generator cli) main!) (list"
             " \"generate\" \"--input\" \"~a\" \"--output\" \"~a\""
             " \"--module\" \"petstore\" \"--controllers\" \"artanis\""
             " \"--http\" \"curl\"))'"

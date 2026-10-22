@@ -840,11 +840,12 @@ says null means for it."
                 (let* ((shape (property-shape property))
                        (accessor (list (accessor-symbol symbol field) 'value))
                        (required? (property-required? property))
-                       (nullable? (shape-nullable? shape)))
-                  (if (or required? nullable?)
+                       (accepts-null? (shape-accepts-null? shape)))
+                  (if (or required? accepts-null?)
                       `(list (cons ,(property-name property)
                                    ,(box-expression ctx shape accessor
-                                                    (not required?))))
+                                                    (or (not required?)
+                                                        accepts-null?))))
                       `(if (eq? ,accessor #f)
                            ,(quoted '())
                            (list (cons ,(property-name property)
@@ -960,6 +961,19 @@ is allowed (@code{additionalProperties: true}), the values are kept as they are.
                     (not (member (car entry) ,(quoted known-fields))))
                   node))))
 
+(define (shape-accepts-null? shape)
+  "Return @code{#t} when @var{shape} accepts JSON null.
+
+OpenAPI spells that three ways: @code{nullable: true}, @code{type: [T, null]},
+or a @code{null} member of a @code{oneOf}/{@code{anyOf}.}  All three mean the
+same thing to a caller, so a required member may hold @code{#f} for null."
+  (or (shape-nullable? shape)
+      (and (union-shape? shape)
+           (any (lambda (branch)
+                  (and (scalar-shape? branch)
+                       (eq? (shape-type branch) 'null)))
+                (shape-branches shape)))))
+
 (define (boolean-shape? shape)
   "Return @code{#t} when @var{shape} is a boolean.
 
@@ -973,14 +987,16 @@ mean missing."
   "Return the validation forms of one property of a record.
 
 A required property is checked for presence and then checked where it sits; an
-optional or nullable one is checked only when it holds something, because
-@code{#f} is how an absent member is spelled and the checks are about a value that
-is there."
+optional or null-accepting one is checked only when it holds something, because
+@code{#f} is how an absent or null member is spelled and the checks are about a
+value that is there."
   (let* ((path (quoted (list symbol (property-name property))))
          (expression (list (accessor-symbol symbol field) 'value))
          (shape (property-shape property))
+         (accepts-null? (shape-accepts-null? shape))
          (required? (and (property-required? property)
-                         (not (boolean-shape? shape))))
+                         (not (boolean-shape? shape))
+                         (not accepts-null?)))
          (checks (schema-checks ctx shape path expression)))
     (append
      (if required?
@@ -988,7 +1004,7 @@ is there."
          '())
      (cond
        ((null? checks) '())
-       ((or (not required?) (shape-nullable? shape))
+       ((or (not required?) accepts-null?)
         (list `(when ,expression ,@checks)))
        (else checks)))))
 

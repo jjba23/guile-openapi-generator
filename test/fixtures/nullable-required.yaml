@@ -1,0 +1,38 @@
+openapi: 3.0.3
+info:
+  title: Nullable Required
+  version: 1.0.0
+paths:
+  /pairs:
+    get:
+      operationId: listPairs
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pair'
+components:
+  schemas:
+    Pair:
+      type: object
+      required: [label, note, maybe]
+      properties:
+        label:
+          type: string
+        note:
+          type: string
+          nullable: true
+        maybe:
+          oneOf:
+            - $ref: '#/components/schemas/Widget'
+            - type: "null"
+    Widget:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string

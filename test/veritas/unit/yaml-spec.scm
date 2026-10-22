@@ -74,6 +74,22 @@
                              #:got (jso-ref features "single")
                              #:name "a doubled quote is an escaped quote"))
 
+         (test "A quoted scalar may continue on the next line"
+               (assert-equal
+                #:expect "first line second line"
+                #:got (jso-ref (parse "value:\n  \"first line\n  second line\"\n")
+                               "value"))
+               (assert-equal
+                #:expect "first line second line"
+                #:got (jso-ref (parse "value: \"first line\n  second line\"\n")
+                               "value")))
+
+         (test "A plain scalar may continue at the same indentation"
+               (assert-equal
+                #:expect "first line second line"
+                #:got (jso-ref (parse "value:\n  first line\n  second line\n")
+                               "value")))
+
          (test "A comment is not part of the value"
                (assert-equal #:expect '(("a" . 1) ("b" . "x#not-a-comment"))
                              #:got (parse "a: 1 # comment\nb: x#not-a-comment\n")

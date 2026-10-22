@@ -218,7 +218,7 @@ you are in the root of a checkout of this repository.
 ** Generate
 
 #+begin_src shell
-guile -L ./src -c '((@ (openapi-generator cli) main)
+guile -L ./src -c '((@ (openapi-generator cli) main!)
                     (list "generate" "--input" "examples/petstore.yaml"
                           "--output" "gen" "--module" "petstore"))'
 #+end_src
@@ -235,7 +235,7 @@ gen/petstore/README.org        what was generated, and how to use it
 Ask for an Artanis adapter and a libcurl client with two flags:
 
 #+begin_src shell
-guile -L ./src -c '((@ (openapi-generator cli) main)
+guile -L ./src -c '((@ (openapi-generator cli) main!)
                     (list "generate" "-i" "examples/petstore.yaml" "-o" "gen"
                           "--module" "petstore"
                           "--controllers" "artanis" "--http" "curl"))'
@@ -386,7 +386,7 @@ http: guile
 #+end_src
 
 #+begin_src shell
-guile -L ../../src -c '((@ (openapi-generator cli) main)
+guile -L ../../src -c '((@ (openapi-generator cli) main!)
                         (list "generate" "--config" "openapi-generator.yaml"))'
 #+end_src
 
@@ -559,7 +559,7 @@ dependencies: guix
 #+end_src
 
 #+begin_src shell
-guile -L ./src -c '((@ (openapi-generator cli) main)
+guile -L ./src -c '((@ (openapi-generator cli) main!)
                     (list "generate" "--config" "openapi-generator.yaml"))'
 #+end_src
 

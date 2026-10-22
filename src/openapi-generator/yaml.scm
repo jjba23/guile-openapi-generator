@@ -126,8 +126,27 @@ OpenAPI specification is a single document.
           (line-content position)
           #f))
 
+    (define (peek-continuation-at-least indent)
+      "Return the next line's content when its indentation is at least INDENT.
+
+A plain or quoted scalar may continue at the indentation of its first line;
+what makes it a continuation is that it is not a mapping or sequence entry, and
+that the scalar has not ended yet."
+      (skip-blanks!)
+      (if (and (< position count)
+               (not pending)
+               (>= (line-indent position) indent))
+          (line-content position)
+          #f))
+
     (define (fetch-continuation! indent)
       (let ((content (peek-continuation indent)))
+        (when content
+          (set! position (+ position 1)))
+        content))
+
+    (define (fetch-continuation-at-least! indent)
+      (let ((content (peek-continuation-at-least indent)))
         (when content
           (set! position (+ position 1)))
         content))
@@ -218,6 +237,13 @@ OpenAPI specification is a single document.
             (else
              (loop (+ index 1) (cons (string-ref text index) out)))))))
 
+    (define (fetch-quoted-continuation! indent)
+      "Return the next line that may continue the quoted scalar at INDENT.
+
+A quoted scalar may continue at the indentation of its opening line or deeper;
+the closing quote, not the indentation, is what ends it."
+      (fetch-continuation-at-least! indent))
+
     (define (quoted-value text indent)
       "Parse a quoted scalar that may continue on the following lines."
       (let loop ((buffer text) (guard 0))
@@ -228,9 +254,9 @@ OpenAPI specification is a single document.
             ((not start)
              (resolve-scalar buffer))
             ((unterminated? buffer (+ start 1) (string-ref buffer start))
-             (let ((continuation (if (> guard 100)
+             (let ((continuation (if (> guard 1000)
                                      #f
-                                     (fetch-continuation! indent))))
+                                     (fetch-quoted-continuation! indent))))
                (if continuation
                    (loop (string-append buffer " " continuation) (+ guard 1))
                    (error "YAML: unterminated quoted scalar" text))))
@@ -241,7 +267,7 @@ OpenAPI specification is a single document.
     (define (plain-value text indent)
       "Parse a plain scalar, folding the continuation lines that belong to it."
       (let loop ((parts (list text)))
-        (let ((continuation (peek-continuation indent)))
+        (let ((continuation (peek-continuation-at-least indent)))
           (if (and continuation
                    (not (string-null? continuation))
                    (not (mapping-entry continuation))
@@ -460,17 +486,23 @@ OpenAPI specification is a single document.
         ((string-null? content)
          #f)
         ((memv (string-ref content 0) '(#\' #\"))
-         (receive (key end) (parse-quoted content 0)
-           (let loop ((index end))
-             (cond
-               ((>= index (string-length content)) #f)
-               ((char=? (string-ref content index) #\:)
-                (cons key
-                      (string-trim-both (substring content (+ index 1)
-                                              (string-length content)))))
-               ((memv (string-ref content index) '(#\space #\tab))
-                (loop (+ index 1)))
-               (else #f)))))
+         (let ((delimiter (string-ref content 0)))
+           ;; A quote that does not close on this line starts a multi-line
+           ;; scalar, not a mapping entry; the scalar parser will consume the
+           ;; continuation lines.
+           (if (unterminated? content 1 delimiter)
+               #f
+               (receive (key end) (parse-quoted content 0)
+                 (let loop ((index end))
+                   (cond
+                     ((>= index (string-length content)) #f)
+                     ((char=? (string-ref content index) #\:)
+                      (cons key
+                            (string-trim-both (substring content (+ index 1)
+                                                    (string-length content)))))
+                     ((memv (string-ref content index) '(#\space #\tab))
+                      (loop (+ index 1)))
+                     (else #f)))))))
         (else
          (let loop ((index 0))
            (cond

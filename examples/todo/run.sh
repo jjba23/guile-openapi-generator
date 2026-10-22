@@ -18,7 +18,7 @@ manifest="$root/manifest.scm"
 generate() {
   ( cd "$here" && guix shell -m "$manifest" -- \
       guile -L "$root/src" \
-      -c '((@ (openapi-generator cli) main)
+      -c '((@ (openapi-generator cli) main!)
            (list "generate" "--config" "openapi-generator.yaml"))' )
 }
 

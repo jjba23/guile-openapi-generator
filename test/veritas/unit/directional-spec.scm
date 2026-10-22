@@ -171,6 +171,26 @@
                  #:http 'none
                  #:request-response-models? #t))
 
+         (test "An operation response does not overwrite a component response"
+               (with-generated 'directional-collision
+                 (lambda (directory)
+                   (let ((text (models-text directory
+                                            "directional-collision")))
+                     (assert-equal
+                      #:expect 1
+                      #:got (occurrences
+                             text
+                             "(define-record-type <sign-in-response>"))
+                     (assert-equal
+                      #:expect 1
+                      #:got (occurrences
+                             text
+                             "(define-record-type <sign-in-response-2>"))))
+                 #:input (fixture "directional-collision.yaml")
+                 #:controllers 'none
+                 #:http 'none
+                 #:request-response-models? #t))
+
          (test "The client sends a request model and decodes a response model"
                (with-generated 'directional-client
                  (lambda (directory)

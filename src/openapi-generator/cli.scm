@@ -21,7 +21,7 @@
 ;;
 ;; @example
 ;; guile -L src -- \
-;;   -c '((@ (openapi-generator cli) main)
+;;   -c '((@ (openapi-generator cli) main!)
 ;;        (list "generate" "--input" "petstore.yaml" "--output" "gen"
 ;;              "--controllers" "artanis" "--http" "curl"))'
 ;; @end example
@@ -45,6 +45,7 @@
   #:use-module (openapi-generator config-file)
   #:use-module (openapi-generator bundle)
   #:export (main
+            main!
             options
             usage
             parse-backend
@@ -482,3 +483,11 @@ written when it differs from the file."
                 "openapi-generator: ~a~%"
                 (exception-message key arguments))
         1))))
+
+(define* (main! #:optional (arguments (cdr (command-line))))
+  "Run the generator as a command and exit with its status.
+
+@code{main} returns the status so tests can call it; this wrapper is what a
+script wants, because a failed generation must not leave the caller thinking it
+succeeded."
+  (exit (main arguments)))

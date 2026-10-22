@@ -170,6 +170,20 @@
                              #:got (lines (check-models 'e2e-models-json
                                                         "models-json"))))
 
+         (test "A required member that accepts null may be #f"
+               (assert-equal
+                #:expect '("null" "null" "#f" "#f" "w")
+                #:got
+                (lines
+                 (with-generated 'e2e-nullable-required
+                   (lambda (directory)
+                     (run-program directory
+                                  (list '(e2e-nullable-required models))
+                                  "nullable-required"))
+                   #:input (fixture "nullable-required.yaml")
+                   #:controllers 'none
+                   #:http 'none))))
+
          (test "A merge patch replaces and removes members"
                (assert-equal #:expect '("Tom" "#f")
                              #:got (lines (check-models 'e2e-models-patch

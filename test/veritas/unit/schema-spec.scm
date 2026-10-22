@@ -134,6 +134,17 @@
                  (assert-equal #:expect '("fresh" "salt")
                                #:got (shape-values (property-shape water)))))
 
+         (test "A const is a one-value enumeration"
+               (let ((shape (schema-shape
+                             document
+                             '(("type" . "string") ("const" . "accepted"))
+                             #:named? #f)))
+                 (assert-true (enum-shape? shape))
+                 (assert-equal #:expect '("accepted")
+                               #:got (shape-values shape))
+                 (assert-equal #:expect "string"
+                               #:got (symbol->string (shape-type shape)))))
+
          (test "An object of only additionalProperties is a map"
                (let ((shape (shape-by-name "StringMap")))
                  (assert-true (map-shape? shape))

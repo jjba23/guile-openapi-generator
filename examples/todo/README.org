@@ -49,7 +49,7 @@ root.
 or, without the script:
 
 #+begin_src shell
-guile -L ../../src -c '((@ (openapi-generator cli) main)
+guile -L ../../src -c '((@ (openapi-generator cli) main!)
                         (list "generate" "--config" "openapi-generator.yaml"))'
 #+end_src
 
