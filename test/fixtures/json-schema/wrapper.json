@@ -1,0 +1,12 @@
+{
+  "metadata": { "name": "WrapperDoc" },
+  "spec": {
+    "schemaObject": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "integer" }
+      }
+    }
+  }
+}

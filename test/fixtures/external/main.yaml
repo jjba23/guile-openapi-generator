@@ -1,0 +1,26 @@
+# The primary document of the external-reference tests.  It references a schema
+# in another file, which in turn references a third.
+openapi: 3.0.3
+info:
+  title: External
+  version: 1.0.0
+paths:
+  /users:
+    get:
+      operationId: listUsers
+      responses:
+        '200':
+          description: Users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: 'schemas.yaml#/components/schemas/User'
+components:
+  schemas:
+    Local:
+      type: object
+      properties:
+        id:
+          type: string

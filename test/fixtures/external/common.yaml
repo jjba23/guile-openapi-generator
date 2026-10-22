@@ -1,0 +1,13 @@
+components:
+  schemas:
+    Address:
+      type: object
+      required: [street]
+      properties:
+        street:
+          type: string
+    Unused:
+      type: object
+      properties:
+        x:
+          type: string

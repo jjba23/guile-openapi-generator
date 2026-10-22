@@ -102,5 +102,39 @@
                (assert-false (supported-version? "2.0"))
                (assert-false (supported-version? #f)))))
 
+(define document-suite
+  (suite "Documents and fragments"
+         (test "A locator is a file or URL, not document text"
+               (assert-true (locator? (fixture "mini.yaml")))
+               (assert-false (locator? "openapi: 3.0.0\ninfo: {title: X}\n")))
+
+         (test "A format is read from a URL path, not its query"
+               (assert-eq #:expect 'json
+                          #:got (format-for-locator
+                                 "https://example.com/api.json?token=1"))
+               (assert-eq #:expect 'yaml
+                          #:got (format-for-locator
+                                 "https://example.com/api.yaml#fragment")))
+
+         (test "A document is parsed without being validated as OpenAPI"
+               (assert-equal #:expect "Old"
+                             #:got (document-title
+                                    (read-document (fixture "swagger2.yaml")))))
+
+         (test "Fragments merge objects and replace values"
+               (assert-equal
+                #:expect '(("a" . 1) ("b" . 2) ("c" . 3))
+                #:got (merge-documents '(("a" . 1) ("b" . 2))
+                                       '(("c" . 3))))
+               (assert-equal
+                #:expect '(("a" ("x" . 1) ("y" . 2)))
+                #:got (merge-documents '(("a" ("x" . 1)))
+                                       '(("a" ("y" . 2))))
+                #:name "objects merge recursively")
+               (assert-equal
+                #:expect '(("a" . 3))
+                #:got (merge-documents '(("a" . 1)) '(("a" . 3)))
+                #:name "a scalar is replaced"))))
+
 (define (spec)
-  (veritas-run format-suite parse-suite validation-suite))
+  (veritas-run format-suite parse-suite validation-suite document-suite))

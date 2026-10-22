@@ -1,0 +1,9 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "Measure",
+  "type": "object",
+  "properties": {
+    "value": { "type": "number", "minimum": 0, "exclusiveMinimum": true },
+    "unit": { "type": "string", "const": "mm" }
+  }
+}

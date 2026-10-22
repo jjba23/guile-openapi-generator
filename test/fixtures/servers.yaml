@@ -1,0 +1,14 @@
+openapi: 3.0.3
+info:
+  title: Servers
+  version: 1.0.0
+servers:
+  - url: https://{region}.example.com/{version}
+    description: Variable server
+    variables:
+      region:
+        default: eu
+        enum: [eu, us]
+      version:
+        default: v1
+paths: {}

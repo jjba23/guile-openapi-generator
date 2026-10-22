@@ -1,0 +1,15 @@
+components:
+  schemas:
+    User:
+      type: object
+      required: [id, address]
+      properties:
+        id:
+          type: string
+        address:
+          $ref: 'common.yaml#/components/schemas/Address'
+    LocalUser:
+      type: object
+      properties:
+        note:
+          type: string

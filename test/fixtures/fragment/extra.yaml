@@ -1,0 +1,21 @@
+paths:
+  /toys:
+    get:
+      operationId: listToys
+      responses:
+        '200':
+          description: Toys
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Toy'
+components:
+  schemas:
+    Toy:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string

@@ -36,18 +36,22 @@
   #:use-module (ice-9 format)
   #:use-module (ice-9 getopt-long)
   #:use-module (ice-9 match)
+  #:use-module (ice-9 regex)
   #:use-module (ice-9 textual-ports)
   #:use-module (srfi srfi-1)
   #:use-module (srfi srfi-13)
   #:use-module (openapi-generator generator)
   #:use-module (openapi-generator config)
   #:use-module (openapi-generator config-file)
+  #:use-module (openapi-generator bundle)
   #:export (main
             options
             usage
             parse-backend
             parse-controllers
-            parse-dependencies))
+            parse-dependencies
+            parse-resolution-mode
+            parse-auth-header))
 
 (define option-descriptions
   '((help . "Show this help and exit.")
@@ -67,7 +71,12 @@
     (no-validate . "Do not check that the input is OpenAPI 3.x.")
     (no-header . "Omit the banner comment from generated files.")
     (header-file . "Add the contents of FILE to the generated banner.")
-    (dependencies . "none or guix: write a dependencies.scm manifest.")))
+    (dependencies . "none or guix: write a dependencies.scm manifest.")
+    (json-schema-file . "Read a JSON Schema document instead of an OpenAPI spec.")
+    (json-schema-root-name . "Name the schema generated from a JSON Schema's top level.")
+    (api-fragment . "Merge a partial OpenAPI document into the primary one.")
+    (auth . "Send 'Name: value' on remote fetches; repeatable.")
+    (resolve-external . "none, targeted or aggressive external $ref resolution.")))
 
 (define options
   '((help (single-char #\h))
@@ -87,7 +96,12 @@
     (no-validate)
     (no-header)
     (header-file (value #t))
-    (dependencies (value #t))))
+    (dependencies (value #t))
+    (json-schema-file (value #t))
+    (json-schema-root-name (value #t))
+    (api-fragment (value #t))
+    (auth (value #t))
+    (resolve-external (value #t))))
 
 (define (usage port)
   "Write the usage of the command to @var{port}."
@@ -172,6 +186,89 @@ a short spelling would print as @code{(-(h))}."
                        (string-join (map symbol->string dependency-backends)
                                     ", "))))))
 
+(define (parse-resolution-mode value)
+  "Return the external reference mode named by @var{value}."
+  (let ((mode (string->symbol
+               (string-downcase (format #f "~a" (or value "none"))))))
+    (if (memq mode resolution-modes)
+        mode
+        (error (format #f
+                       "Unknown external reference mode ~a; expected one of ~a"
+                       value
+                       (string-join (map symbol->string resolution-modes)
+                                    ", "))))))
+
+(define (substitute-env text)
+  "Return @var{text} with @code{$@{NAME@}} replaced by the environment value.
+
+A missing variable is an error: sending @code{Authorization: Bearer } because a
+CI secret was not set would turn a configuration mistake into an authentication
+failure at the server."
+  (regexp-substitute/global
+   #f
+   "\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}"
+   text
+   'pre
+   (lambda (match)
+     (let* ((name (match:substring match 1))
+            (value (getenv name)))
+       (unless value
+         (error (format #f
+                        "Environment variable ~a named by --auth is not set"
+                        name)))
+       value))
+   'post))
+
+(define (title-case-header name)
+  "Return @var{name} with each hyphen-separated part capitalised.
+
+Guile's web client parses a lower-case @code{authorization} header as a typed
+value and rejects a plain string; the title-case spelling is written through
+unchanged, and HTTP header names are case-insensitive anyway."
+  (string-join (map string-titlecase (string-split name #\-)) "-"))
+
+(define (parse-auth-header value)
+  "Return the @code{(name . value)} header described by a @code{--auth} argument."
+  (let ((colon (string-index value #\:)))
+    (unless colon
+      (error (format #f
+                     "Invalid --auth ~s; expected 'Name: value'"
+                     value)))
+    (cons (string->symbol
+           (title-case-header
+            (string-trim-both (substring value 0 colon))))
+          (substitute-env
+           (string-trim-both
+            (substring value (+ colon 1) (string-length value)))))))
+
+(define (collect-option-values arguments long-name)
+  "Return every value given for @var{long-name} in @var{arguments}.
+
+@code{getopt-long} keeps only the last occurrence of a repeatable option, so the
+raw argument list is scanned for the ones that have to accumulate: @code{--auth}
+and @code{--api-fragment}."
+  (let loop ((rest arguments) (values '()))
+    (cond
+      ((null? rest) (reverse values))
+      ((string=? (car rest) long-name)
+       (if (pair? (cdr rest))
+           (loop (cddr rest) (cons (cadr rest) values))
+           values))
+      ((string-prefix? (string-append long-name "=") (car rest))
+       (loop (cdr rest)
+             (cons (substring (car rest)
+                              (+ (string-length long-name) 1)
+                              (string-length (car rest)))
+                   values)))
+      (else (loop (cdr rest) values)))))
+
+(define (repeatable-values arguments config key long-name)
+  "Return the repeated command-line @var{key} values, or the config file's list."
+  (let ((from-command-line (collect-option-values arguments long-name)))
+    (if (pair? from-command-line)
+        from-command-line
+        (config-list (config-ref config key #f)))))
+
 (define (option-supplied? parsed key)
   "Return @code{#t} when @var{key} was present on the command line."
   (and (assq key parsed) #t))
@@ -242,6 +339,21 @@ written when it differs from the file."
                               (or (option-ref parsed 'targets #f)
                                   (config-ref config 'targets #f))))
                     (input (resolve-option parsed config 'input #f))
+                    (json-schema-file (resolve-option parsed config
+                                                     'json-schema-file #f))
+                    (json-schema-root-name
+                     (resolve-option parsed config
+                                     'json-schema-root-name #f))
+                    (resolve-external
+                     (parse-resolution-mode
+                      (resolve-option parsed config
+                                      'resolve-external "none")))
+                    (auth-values (repeatable-values arguments config
+                                                    'auth "--auth"))
+                    (headers (map parse-auth-header auth-values))
+                    (fragments (repeatable-values arguments config
+                                                  'api-fragment
+                                                  "--api-fragment"))
                     (output (resolve-option parsed config 'output "generated"))
                     (controllers-value (resolve-option parsed config
                                                        'controllers "vanilla"))
@@ -280,11 +392,16 @@ written when it differs from the file."
                      (parse-dependencies
                       (resolve-option parsed config
                                       'dependencies "none"))))
-               (unless input
+               (unless (or input json-schema-file)
                  (usage (current-error-port))
-                 (error "--input is required"))
+                 (error "one of --input or --json-schema-file is required"))
                (let ((written
                       (generate #:input input
+                                #:json-schema-file json-schema-file
+                                #:json-schema-root-name json-schema-root-name
+                                #:api-fragments fragments
+                                #:headers headers
+                                #:resolve-external resolve-external
                                 #:output output
                                 #:module (resolve-option parsed config
                                                          'module #f)

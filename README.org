@@ -237,6 +237,11 @@ Usage: openapi-generator generate --input SPEC --output DIR [options]
   --no-header                   Omit the banner comment from generated files.
   --header-file VALUE           Add the contents of FILE to the generated banner.
   --dependencies VALUE          none or guix: write a dependencies.scm manifest.
+  --json-schema-file VALUE      Read a JSON Schema document instead of an OpenAPI spec.
+  --json-schema-root-name VALUE Name the schema generated from a JSON Schema's top level.
+  --api-fragment VALUE          Merge a partial OpenAPI document into the primary one.
+  --auth VALUE                  Send 'Name: value' on remote fetches; repeatable.
+  --resolve-external VALUE      none, targeted or aggressive external $ref resolution.
 #+end_example
 
 An unknown value is an error rather than a silent fallback: a typo in
@@ -255,6 +260,8 @@ module: petstore
 targets: [models, client]
 modelSuffix: Dto
 operation-id-transform: '^V2_(.*)$:v2-\1'
+resolve-external: targeted
+auth: ['Authorization: Bearer ${API_TOKEN}']
 header: true
 header-file: LICENSE-HEADER.txt
 dependencies: guix
@@ -271,6 +278,34 @@ without changing the rest of the configuration.  Generating a client or a
 controller always brings the models those need.  =--dependencies guix= writes a
 =dependencies.scm= manifest for =guix shell -m=, and =--no-header= /
 =--header-file= control the banner every generated file starts with.
+
+** Inputs and references
+
+- *Remote specifications.* =--input= accepts an http(s) URL as well as a path.
+  =--auth 'Name: value'= sends a header on every fetch (the input, every
+  =--api-fragment=, and every remote =$ref=); it is repeatable and expands
+  =${ENV_VAR}= from the environment.  A missing variable is an error, not an
+  empty credential.
+- *Fragments.* =--api-fragment FILE= merges a partial OpenAPI document into the
+  primary one.  Objects merge key by key and a key the fragment defines wins, so
+  a fragment can add paths and schemas without rewriting the base document.  The
+  option is repeatable.
+- *External references.* =--resolve-external targeted= follows the =$ref=s the
+  primary document reaches and copies each target into
+  =components/<type>/<name>=, rewriting the reference.  =aggressive= also adds
+  every schema of an external file as soon as one reference has caused that file
+  to be read.  Relative references resolve against the document that contains
+  them, cycles are fine, and a name already taken by the primary document gains
+  a =-2= suffix.  The default, =none=, leaves external references alone.
+- *JSON Schema.* =--json-schema-file FILE= takes a JSON Schema document instead
+  of an OpenAPI one.  The top-level schema becomes a component named by
+  =--json-schema-root-name= (or its =title=), =$defs=/=definitions= are hoisted
+  into =components/schemas= with their references rewritten, draft-04 boolean
+  exclusive bounds become numeric, and =const= becomes a one-value enumeration.
+  =FILE#/pointer= selects a schema nested inside a larger document.
+- *Server variables.* A server URL such as
+  =https://{region}.example.com/{version}= is expanded with each variable's
+  declared default, so the generated client starts from a usable base URL.
 
 ** From Scheme instead
 
@@ -314,6 +349,11 @@ Every flag has a keyword argument, and the same run is a function call:
 | =#:header?=         | =#t=         | write the banner comment at the top of generated files     |
 | =#:header-text=     | —            | an extra banner paragraph (license or disclaimer)          |
 | =#:dependencies=    | ='none=      | =none= or =guix= to write a =dependencies.scm= manifest     |
+| =#:json-schema-file= | —           | read a JSON Schema document instead of an OpenAPI one      |
+| =#:json-schema-root-name= | —      | name the schema generated from a JSON Schema's top level    |
+| =#:api-fragments=   | ='()=        | partial OpenAPI documents merged into the primary one       |
+| =#:headers=         | ='()=        | headers sent on remote fetches and remote =$ref=s           |
+| =#:resolve-external= | ='none=     | =none=, =targeted= or =aggressive= external reference mode   |
 
 * What gets generated
 
@@ -526,7 +566,10 @@ guile-openapi-generator/
 │   ├── yaml.scm          the YAML reader, in Scheme
 │   ├── json.scm          JSON through guile-json
 │   ├── jso.scm           the shared value representation, and merge patch
-│   ├── reader.scm        format detection and OpenAPI 3.x validation
+│   ├── reader.scm        format detection, fetching and OpenAPI 3.x validation
+│   ├── config-file.scm   options read from a YAML/JSON config file
+│   ├── json-schema.scm   a JSON Schema document wrapped as OpenAPI
+│   ├── bundle.scm        external $ref resolution into one document
 │   ├── spec.scm          operations, parameters, responses, security
 │   ├── schema.scm        what a schema means: records, enums, unions, maps
 │   ├── naming.scm        specification names -> Scheme names
@@ -596,7 +639,7 @@ guix shell guile guile-json guile-curl guile-fibers -- \
 
 ** Tests
 
-Thirteen Veritas suites, well over three hundred assertions, in three layers:
+Fourteen Veritas suites, well over three hundred assertions, in three layers:
 
 - *Reading*: the YAML reader (scalars, collections, block scalars, anchors,
   markers), the value representation and merge patch, format detection, and the
@@ -615,6 +658,10 @@ Thirteen Veritas suites, well over three hundred assertions, in three layers:
   generated, the records are used to check that arrays, inexact multiples, bare
   objects and extension members keep their data, the dispatcher is run against
   the full route table, and the generated client calls a server for real.
+
+  An *input* suite covers where a document comes from: JSON Schema conversion,
+  API fragments, external references (including cycles) and a remote
+  specification fetched with authentication.
 
 The generated trees are left in place, because a failing test should be
 inspectable; they are git-ignored.

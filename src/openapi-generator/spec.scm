@@ -56,6 +56,7 @@
             spec-raw
             spec-source
             spec-base-url
+            expand-server-url
             <server> server? make-server
             server-url
             server-description
@@ -322,11 +323,37 @@ operationId before it becomes a generated name."
                       (jso-ref server "variables")))
        (jso-array->list (jso-ref document "servers"))))
 
+(define (expand-server-url url variables)
+  "Return @var{url} with each @code{{name}} replaced by the default of @var{name}.
+
+Server variables are part of the specification's own description of where the
+API lives; using the declared default is what makes a generated client start
+from a usable URL instead of one containing braces."
+  (if (not (jso-object? variables))
+      url
+      (fold (lambda (entry result)
+              (let ((name (car entry))
+                    (default (jso-ref (cdr entry) "default")))
+                (if (or (not default) (json-null? default))
+                    result
+                    (string-replace-substring
+                     result
+                     (format #f "{~a}" name)
+                     (format #f "~a" default)))))
+            url
+            variables)))
+
 (define (spec-base-url spec)
-  "Return the first server URL of @var{spec}, or #f when it declares none."
+  "Return the first server URL of @var{spec}, or #f when it declares none.
+
+A URL with server variables is expanded with each variable's declared default;
+one that still contains a placeholder after that is not a usable default and is
+ignored."
   (let ((servers (spec-servers spec)))
     (and (pair? servers)
-         (let ((url (server-url (car servers))))
+         (let* ((server (car servers))
+                (url (expand-server-url (server-url server)
+                                        (server-variables server))))
            (and (string? url)
                 (not (string-null? url))
                 (not (string-contains url "{"))

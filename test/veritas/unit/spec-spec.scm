@@ -193,10 +193,24 @@
                                             "type")
                              #:name "the escape sequence for a slash is understood"))))
 
+(define server-suite
+  (suite "Servers"
+         (test "Server variables are expanded with their defaults"
+               (let ((servers (fixture-spec "servers.yaml")))
+                 (assert-equal #:expect "https://eu.example.com/v1"
+                               #:got (spec-base-url servers))))
+         (test "An explicit variable value replaces a placeholder"
+               (assert-equal #:expect "https://us.example.com/v2"
+                             #:got (expand-server-url
+                                    "https://{region}.example.com/{version}"
+                                    '(("region" ("default" . "us"))
+                                      ("version" ("default" . "v2"))))))))
+
 (define (spec)
   (veritas-run #:concurrent? #f
                document-suite
                operation-suite
                response-suite
                security-suite
-               reference-suite))
+               reference-suite
+               server-suite))

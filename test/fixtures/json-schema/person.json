@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Person",
+  "type": "object",
+  "required": ["name"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "age": { "type": "integer", "minimum": 0 },
+    "address": { "$ref": "#/$defs/Address" }
+  },
+  "$defs": {
+    "Address": {
+      "type": "object",
+      "required": ["street"],
+      "properties": {
+        "street": { "type": "string" },
+        "zip": { "type": "string", "pattern": "^[0-9]{5}$" }
+      }
+    }
+  }
+}

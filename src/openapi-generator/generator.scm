@@ -41,6 +41,8 @@
   #:use-module (openapi-generator jso)
   #:use-module (openapi-generator naming)
   #:use-module (openapi-generator reader)
+  #:use-module (openapi-generator bundle)
+  #:use-module (openapi-generator json-schema)
   #:use-module (openapi-generator spec)
   #:use-module (openapi-generator schema)
   #:use-module (openapi-generator config)
@@ -161,6 +163,12 @@ installed one."
 ;;; Commentary:
 ;;; Generating
 
+(define (document-base source)
+  "Return the locator part of @var{source}, dropping a @code{#/pointer} fragment."
+  (if (and (string? source) (string-index source #\#))
+      (substring source 0 (string-index source #\#))
+      source))
+
 (define* (generate #:key
                    (document #f)
                    (input #f)
@@ -178,11 +186,23 @@ installed one."
                    (operation-id-transform #f)
                    (header? #t)
                    (header-text #f)
-                   (dependencies 'none))
+                   (dependencies 'none)
+                   (json-schema-file #f)
+                   (json-schema-root-name #f)
+                   (api-fragments '())
+                   (headers '())
+                   (resolve-external 'none))
   "Generate Guile code from an OpenAPI 3.x specification.
 
-Exactly one of @var{document} (a parsed document, as a jso value) and
-@var{input} (a file name) must be given.
+Exactly one of @var{document} (a parsed document, as a jso value),
+@var{input} (a path, an http(s) URL, or the document itself) and
+@var{json-schema-file} (a JSON Schema document, converted to OpenAPI first) must
+be given.
+
+@var{api-fragments} is a list of partial OpenAPI documents merged into the
+primary one before generation.  @var{resolve-external} is @code{none},
+@code{targeted} or @code{aggressive}: the latter two fetch and bundle external
+@code{$ref}s.  @var{headers} is sent on every remote fetch.
 
 @var{output} is the directory the files are written to; @var{module} is the root
 module name, defaulting to the API title; @var{controllers} is @code{vanilla},
@@ -215,16 +235,55 @@ Returns an alist of component to the path that was written:
                           ((string? operation-id-transform)
                            (parse-operation-id-transform operation-id-transform))
                           (else #f)))
-         (parsed (or document
-                     (read-spec input #:validate? validate?)
-                     (error "No specification given: pass #:input or #:document")))
-         (_ (when (and validate? document)
-              ;; A file is validated by read-spec; a document handed over already
-              ;; parsed has to be checked here, so that `#:validate?` means the
-              ;; same thing whichever way the specification arrived.
-              (validate-document parsed (or source-name input "<document>"))))
-         (spec (parse-spec parsed
-                           #:source (or source-name input "<document>")
+         (fragments (cond ((not api-fragments) '())
+                          ((string? api-fragments) (list api-fragments))
+                          (else api-fragments)))
+         (source-label (or source-name input json-schema-file "<document>"))
+         (base-locator (cond ((and json-schema-file (string? json-schema-file))
+                              (document-base json-schema-file))
+                             ((and input (locator? input)) input)
+                             (else #f)))
+         (parsed
+          (cond
+            (json-schema-file
+             (when (or input document)
+               (error (string-append
+                       "Use only one of #:input, #:document and "
+                       "#:json-schema-file")))
+             (read-json-schema json-schema-file
+                               #:headers headers
+                               #:root-name json-schema-root-name))
+            (else
+             (let* ((primary (or document
+                                 (and input
+                                      (read-spec input
+                                                 #:validate? #f
+                                                 #:headers headers))
+                                 (error (string-append
+                                         "No specification given: pass "
+                                         "#:input, #:json-schema-file or "
+                                         "#:document"))))
+                    (merged (fold (lambda (fragment result)
+                                    (merge-documents
+                                     result
+                                     (bundle-external-refs
+                                      (read-document fragment
+                                                     #:headers headers)
+                                      (document-base fragment)
+                                      #:mode resolve-external
+                                      #:headers headers)))
+                                  primary
+                                  fragments)))
+               merged))))
+         (bundled (bundle-external-refs parsed base-locator
+                                        #:mode resolve-external
+                                        #:headers headers))
+         (_ (when validate?
+              ;; Validation happens after fragments and external references have
+              ;; been folded in, so it sees the document that is generated.
+              (validate-document bundled source-label)))
+         (spec (parse-spec bundled
+                           #:source source-label
                            #:operation-id-transform transform))
          (root (root-module-name spec module))
          (root-module (list (string->symbol root)))
