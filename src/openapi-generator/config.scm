@@ -51,6 +51,12 @@
             config-header?
             config-header-text
             config-dependencies
+            config-request-response-models?
+            config-exclude-read-only?
+            config-exclude-write-only?
+            config-x-extensible-enums?
+            config-fault-tolerant-enums?
+            config-non-null-response-payloads?
             controller-backends
             http-backends
             dependency-backends))
@@ -83,7 +89,13 @@
                model-suffix
                header?
                header-text
-               dependencies)
+               dependencies
+               request-response-models?
+               exclude-read-only?
+               exclude-write-only?
+               x-extensible-enums?
+               fault-tolerant-enums?
+               non-null-response-payloads?)
   config?
   (output config-output)
   (root config-root)
@@ -103,7 +115,13 @@
   (model-suffix config-model-suffix)
   (header? config-header?)
   (header-text config-header-text)
-  (dependencies config-dependencies))
+  (dependencies config-dependencies)
+  (request-response-models? config-request-response-models?)
+  (exclude-read-only? config-exclude-read-only?)
+  (exclude-write-only? config-exclude-write-only?)
+  (x-extensible-enums? config-x-extensible-enums?)
+  (fault-tolerant-enums? config-fault-tolerant-enums?)
+  (non-null-response-payloads? config-non-null-response-payloads?))
 
 (define* (config-module config part)
   "Return the module name of one generated component, e.g. @code{(petstore models)}.

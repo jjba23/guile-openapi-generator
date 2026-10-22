@@ -1,0 +1,54 @@
+# The discriminator lives on the composition parent, not on the oneOf that
+# collects the children.
+openapi: 3.0.3
+info:
+  title: Shapes
+  version: 1.0.0
+paths:
+  /drawings:
+    get:
+      operationId: getDrawing
+      responses:
+        '200':
+          description: A drawing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Drawing'
+components:
+  schemas:
+    Shape:
+      type: object
+      required: [kind]
+      discriminator:
+        propertyName: kind
+        mapping:
+          circle: '#/components/schemas/Circle'
+          square: '#/components/schemas/Square'
+      properties:
+        kind:
+          type: string
+    Circle:
+      allOf:
+        - $ref: '#/components/schemas/Shape'
+        - type: object
+          required: [radius]
+          properties:
+            radius:
+              type: number
+    Square:
+      allOf:
+        - $ref: '#/components/schemas/Shape'
+        - type: object
+          required: [side]
+          properties:
+            side:
+              type: number
+    Drawing:
+      type: object
+      required: [shape]
+      properties:
+        shape:
+          oneOf:
+            - $ref: '#/components/schemas/Circle'
+            - $ref: '#/components/schemas/Square'

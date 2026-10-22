@@ -96,6 +96,12 @@
                       (header? #t)
                       (header-text #f)
                       (dependencies 'none)
+                      (request-response-models? #f)
+                      (exclude-read-only? #f)
+                      (exclude-write-only? #f)
+                      (x-extensible-enums? #f)
+                      (fault-tolerant-enums? #f)
+                      (non-null-response-payloads? #f)
                       (runtime-module '(openapi-generator runtime))
                       (jso-module '(openapi-generator jso)))
   "Return a configuration for the tests."
@@ -117,7 +123,13 @@
                model-suffix
                header?
                header-text
-               dependencies))
+               dependencies
+               request-response-models?
+               exclude-read-only?
+               exclude-write-only?
+               x-extensible-enums?
+               fault-tolerant-enums?
+               non-null-response-payloads?))
 
 ;;; Commentary:
 ;;; Temporary directories and generated trees
@@ -211,7 +223,8 @@ variable would not reach the child reliably."
                                    (list '(openapi-generator jso)
                                          '(openapi-generator runtime)
                                          '(ice-9 format)
-                                         '(ice-9 receive))))
+                                         '(ice-9 receive)
+                                         '(rnrs bytevectors))))
                       "")
                      ") ; end of module\n")
                     (string-join
@@ -275,9 +288,16 @@ so nothing one test generates can be seen by another."
 (define* (with-generated root thunk
                          #:key
                          (input (fixture "petstore.yaml"))
+                         (json-schema-file #f)
                          (controllers 'vanilla)
                          (http 'guile)
-                         (self-contained? #f))
+                         (self-contained? #f)
+                         (request-response-models? #f)
+                         (exclude-read-only? #f)
+                         (exclude-write-only? #f)
+                         (x-extensible-enums? #f)
+                         (fault-tolerant-enums? #f)
+                         (non-null-response-payloads? #f))
   "Generate a tree called @var{root} under test/generated and call THUNK with it.
 
 The directory is left in place: it is git-ignored, a failing test stays
@@ -288,12 +308,19 @@ path."
     (when (file-exists? directory)
       (delete-file-recursively directory))
     (ensure-directory! directory)
-    (generate #:input input
+    (generate #:input (if json-schema-file #f input)
+              #:json-schema-file json-schema-file
               #:output directory
               #:module (symbol->string root)
               #:controllers controllers
               #:http http
-              #:self-contained? self-contained?)
+              #:self-contained? self-contained?
+              #:request-response-models? request-response-models?
+              #:exclude-read-only? exclude-read-only?
+              #:exclude-write-only? exclude-write-only?
+              #:x-extensible-enums? x-extensible-enums?
+              #:fault-tolerant-enums? fault-tolerant-enums?
+              #:non-null-response-payloads? non-null-response-payloads?)
     (thunk directory)))
 
 

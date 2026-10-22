@@ -1,0 +1,33 @@
+openapi: 3.0.3
+info:
+  title: Enums
+  version: 1.0.0
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      responses:
+        '200':
+          description: Pets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pet'
+components:
+  schemas:
+    Status:
+      type: string
+      enum: [available, sold]
+    Mood:
+      type: string
+      x-extensible-enum: [happy, sad]
+    Pet:
+      type: object
+      required: [status]
+      properties:
+        status:
+          $ref: '#/components/schemas/Status'
+        mood:
+          $ref: '#/components/schemas/Mood'

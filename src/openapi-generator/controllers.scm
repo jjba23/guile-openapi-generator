@@ -150,22 +150,40 @@ type of @var{parameter}."
     (query-value-expression parameter raw)))
 
 (define (request-body-decoder operation ctx)
-  "Return the source that decodes the request body of @var{operation}."
+  "Return the source that decodes the request body of @var{operation}.
+
+The media type decides whether the body is JSON, a form, plain text or bytes.
+A multipart body is left raw: parsing it needs the boundary and parts, and a
+handler that wants that should receive the bytes rather than a half-decoded
+value."
   (let* ((media-type (operation-request-media-type operation))
+         (kind (and media-type (media-type-kind media-type)))
          (schema (and media-type (media-type-schema media-type)))
          (shape (and schema
                      (schema-shape (context-document ctx)
                                    schema
-                                   #:registry (context-registry ctx)))))
-    (if shape
-        (format #f
-                (string-append
-                 "(let ((raw (http-request-body request)))"
-                 " (cond ((string? raw) (~a (json-string->jso raw)))"
-                 " ((jso-object? raw) (~a raw)) (else #f)))")
-                (converter-to shape)
-                (converter-to shape))
-        "(http-request-body request)")))
+                                   #:registry (context-request-registry ctx))))
+         (raw "(http-request-body request)"))
+    (cond
+      ((not shape) raw)
+      ((memq kind '(text binary))
+       (if (shape-name shape)
+           (format #f "(~a ~a)" (converter-to shape) raw)
+           raw))
+      ((eq? kind 'form)
+       (format #f
+               "(let ((raw ~a)) (if (string? raw) (~a (parse-query raw)) #f))"
+               raw
+               (converter-to shape)))
+      ((eq? kind 'multipart) raw)
+      (else
+       (format #f
+               (string-append
+                "(let ((raw (http-request-body request)))"
+                " (cond ((string? raw) (~a (json-string->jso raw)))"
+                " ((jso-object? raw) (~a raw)) (else #f)))")
+               (converter-to shape)
+               (converter-to shape))))))
 
 (define (converter-to shape)
   (format #f "jso->~a" (identifier (or (shape-name shape) "value"))))

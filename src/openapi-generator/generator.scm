@@ -43,6 +43,7 @@
   #:use-module (openapi-generator reader)
   #:use-module (openapi-generator bundle)
   #:use-module (openapi-generator json-schema)
+  #:use-module (openapi-generator transforms)
   #:use-module (openapi-generator spec)
   #:use-module (openapi-generator schema)
   #:use-module (openapi-generator config)
@@ -191,7 +192,13 @@ installed one."
                    (json-schema-root-name #f)
                    (api-fragments '())
                    (headers '())
-                   (resolve-external 'none))
+                   (resolve-external 'none)
+                   (request-response-models? #f)
+                   (exclude-read-only? #f)
+                   (exclude-write-only? #f)
+                   (x-extensible-enums? #f)
+                   (fault-tolerant-enums? #f)
+                   (non-null-response-payloads? #f))
   "Generate Guile code from an OpenAPI 3.x specification.
 
 Exactly one of @var{document} (a parsed document, as a jso value),
@@ -221,6 +228,18 @@ they become procedure names.
 @var{header-text} adds a paragraph to it, for a license or a disclaimer.
 @var{dependencies} is @code{none} or @code{guix}: the latter writes a
 @code{dependencies.scm} manifest next to the generated tree.
+
+@var{request-response-models?} emits two model sets whose names carry
+@code{Request} and @code{Response}, each filtered by the direction it describes.
+With one set, @var{exclude-read-only?} and @var{exclude-write-only?} remove the
+matching properties.  @var{x-extensible-enums?} treats
+@code{x-extensible-enum}/{@code{x-extensible-enums} as enumerations, and
+@var{fault-tolerant-enums?} maps unknown string enumeration values to an
+@code{unrecognized} constant instead of failing validation.
+
+@var{non-null-response-payloads?} makes a declared success body mandatory: an
+empty or null body raises @code{openapi-empty-body} instead of decoding to
+@code{#f}.
 
 Returns an alist of component to the path that was written:
 
@@ -278,11 +297,15 @@ Returns an alist of component to the path that was written:
          (bundled (bundle-external-refs parsed base-locator
                                         #:mode resolve-external
                                         #:headers headers))
+         (document (if x-extensible-enums?
+                       (enable-extensible-enums bundled)
+                       bundled))
          (_ (when validate?
-              ;; Validation happens after fragments and external references have
-              ;; been folded in, so it sees the document that is generated.
-              (validate-document bundled source-label)))
-         (spec (parse-spec bundled
+              ;; Validation happens after fragments, external references and
+              ;; optional document transforms have been folded in, so it sees
+              ;; the document that is generated.
+              (validate-document document source-label)))
+         (spec (parse-spec document
                            #:source source-label
                            #:operation-id-transform transform))
          (root (root-module-name spec module))
@@ -311,7 +334,13 @@ Returns an alist of component to the path that was written:
                               (or model-suffix "")
                               header?
                               header-text
-                              dependencies))
+                              dependencies
+                              request-response-models?
+                              exclude-read-only?
+                              exclude-write-only?
+                              x-extensible-enums?
+                              fault-tolerant-enums?
+                              non-null-response-payloads?))
          (written '()))
     (define (record! component relative content)
       (set! written (cons (cons component
@@ -398,6 +427,10 @@ The text is parsed here but validated by @code{generate}, so a caller that passe
   (let* ((root (string-join (map symbol->string (config-module config #f)) "/"))
          (name (identifier (to-kebab (config-root config))))
          (suffix (or (config-model-suffix config) ""))
+         (suffixes (if (config-request-response-models? config)
+                       (list (string-append suffix "Request")
+                             (string-append suffix "Response"))
+                       (list suffix)))
          (operations (spec-operations spec))
          (schemas (spec-schemas spec))
          (files (map car written)))
@@ -441,11 +474,16 @@ The text is parsed here but validated by @code{generate}, so a caller that passe
      (format #f "~%* Schemas~%~%")
      (apply string-append
             (map (lambda (schema)
-                   (let ((schema-name (string-append (named-schema-name schema)
-                                                     suffix)))
-                     (format #f "- =~a= --- =~a= records~%"
-                             schema-name
-                             (to-kebab schema-name))))
+                   (apply string-append
+                          (map (lambda (direction-suffix)
+                                 (let ((schema-name
+                                        (string-append
+                                         (named-schema-name schema)
+                                         direction-suffix)))
+                                   (format #f "- =~a= --- =~a= records~%"
+                                           schema-name
+                                           (to-kebab schema-name))))
+                               suffixes)))
                  schemas))
      (format #f "~%* Using the code~%~%#+begin_src scheme~%")
      (if (member 'models files)
@@ -454,7 +492,7 @@ The text is parsed here but validated by @code{generate}, so a caller that passe
      (if (and (member 'models files) (pair? schemas))
          (format #f "(define value (make-~a #:name \"...\"))~%~%"
                  (to-kebab (string-append (named-schema-name (car schemas))
-                                          suffix)))
+                                          (car suffixes))))
          "")
      (if (member 'client files)
          (format #f "(use-modules (~a client) (~a runtime))~%~%(define client (make-api-client))~%"

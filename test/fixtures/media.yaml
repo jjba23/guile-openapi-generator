@@ -1,0 +1,139 @@
+openapi: 3.0.3
+info:
+  title: Media
+  version: 1.0.0
+paths:
+  /plain:
+    get:
+      operationId: getPlain
+      responses:
+        '200':
+          description: Text
+          content:
+            text/plain:
+              schema:
+                type: string
+  /echo-plain:
+    post:
+      operationId: echoPlain
+      requestBody:
+        required: true
+        content:
+          text/plain:
+            schema:
+              type: string
+      responses:
+        '200':
+          description: The same text
+          content:
+            text/plain:
+              schema:
+                type: string
+  /download:
+    get:
+      operationId: download
+      responses:
+        '200':
+          description: Bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /upload:
+    post:
+      operationId: upload
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: The size
+          content:
+            text/plain:
+              schema:
+                type: string
+  /form:
+    post:
+      operationId: postForm
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                note:
+                  type: string
+      responses:
+        '200':
+          description: Stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FormResult'
+  /multipart:
+    post:
+      operationId: postMultipart
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FormResult'
+  /headers:
+    get:
+      operationId: getHeaders
+      responses:
+        '200':
+          description: With headers
+          headers:
+            X-Rate-Limit:
+              schema:
+                type: integer
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FormResult'
+  /empty:
+    get:
+      operationId: getEmpty
+      responses:
+        '200':
+          description: Declared to have a body, but empty
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FormResult'
+components:
+  schemas:
+    FormResult:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string

@@ -39,6 +39,7 @@
 (define-module (openapi-generator runtime)
   #:declarative? #t
   #:use-module (ice-9 format)
+  #:use-module (ice-9 iconv)
   #:use-module (ice-9 match)
   #:use-module (ice-9 regex)
   #:use-module (ice-9 string-fun)
@@ -91,14 +92,21 @@
             http-response-status
             http-response-headers
             http-response-body
+            http-response-header
             json-response
+            text-response
+            binary-response
             ok
             created
             accepted
             no-content
             error-response
             expect-status
+            require-body
             status-range
+            make-multipart-boundary
+            multipart-part
+            multipart-body
             unauthorized
             forbidden
             not-found
@@ -417,6 +425,74 @@ to spell them: @code{(web client)} wants symbols and libcurl wants an
   (make-http-response status
                       (cons (cons "Content-Type" "application/json") headers)
                       value))
+
+(define* (text-response status text #:optional (headers '()))
+  "Return a response whose body is the plain text @var{text}."
+  (make-http-response status
+                      (cons (cons "Content-Type" "text/plain; charset=utf-8")
+                            headers)
+                      text))
+
+(define* (binary-response status bytes #:optional (headers '()))
+  "Return a response whose body is the binary @var{bytes}."
+  (make-http-response status
+                      (cons (cons "Content-Type"
+                                  "application/octet-stream")
+                            headers)
+                      bytes))
+
+(define (http-response-header response name)
+  "Return the header @var{name} of @var{response}, or @code{#f}."
+  (header-ref (http-response-headers response) name))
+
+(define (require-body value response)
+  "Return @var{value}, or throw @code{openapi-empty-body} when it is absent.
+
+A generated client calls this when the specification declares a success body and
+the caller asked for non-null payloads: a missing or null body is a server
+contract violation, not a value the caller can use."
+  (if (eq? value #f)
+      (throw 'openapi-empty-body
+             (http-response-status response)
+             (http-response-body response))
+      value))
+
+(define (make-multipart-boundary)
+  "Return a boundary suitable for one multipart/form-data request."
+  (format #f "----guile-openapi-~a-~a" (getpid) (random 1000000)))
+
+(define* (multipart-part name value #:optional filename)
+  "Return one multipart part: @var{name}, @var{value} and an optional filename."
+  (list name value filename))
+
+(define (multipart-value-text value)
+  "Return @var{value} as the text of a multipart part."
+  (cond
+    ((string? value) value)
+    ((bytevector? value) (bytevector->string value "ISO-8859-1"))
+    ((json-null? value) "")
+    (else (format #f "~a" value))))
+
+(define* (multipart-body parts #:key boundary)
+  "Return @var{parts}, a list of @code{multipart-part} values, as a request body."
+  (let ((boundary (or boundary (make-multipart-boundary))))
+    (string-append
+     (apply string-append
+            (map (lambda (part)
+                   (let ((name (car part))
+                         (value (cadr part))
+                         (filename (caddr part)))
+                     (string-append
+                      "--" boundary "\r\n"
+                      "Content-Disposition: form-data; name=\"" name "\""
+                      (if filename
+                          (format #f "; filename=\"~a\"" filename)
+                          "")
+                      "\r\n\r\n"
+                      (multipart-value-text value)
+                      "\r\n")))
+                 parts))
+     "--" boundary "--\r\n")))
 
 (define (ok value)
   "Return a @code{200} response carrying @var{value}."

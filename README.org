@@ -54,9 +54,17 @@ Five seconds, one table:
   `openapi-validation-error` naming the field at fault. `(pet? value)` tells you
   the shape, `(pet-valid? value)` tells you the constraints.
 - *Polymorphism, honestly.* `allOf` (inheritance) is flattened into one record,
-  so a `Cat` has the `Pet` members; `oneOf` and `anyOf` become a predicate plus a
-  decoder that dispatches on the discriminator, or on the shape of the node when
-  there is none.
+  so a `Cat` has the `Pet` members; `oneOf` and `anyOf` become a predicate plus
+  a decoder that dispatches on the discriminator, or on the shape of the node when
+  there is none.  A discriminator declared on the composition parent is inherited
+  by the `oneOf` that collects its children.
+- *Directional models.* `readOnly` and `writeOnly` are understood: one model set
+  keeps them optional, `--exclude-read-only`/`--exclude-write-only` drop one
+  category, and `--request-response-models` emits a `Request` and a `Response`
+  set with exactly the members each direction can carry.
+- *Enumerations that can grow.* `--x-extensible-enums` treats an extensible enum
+  as an enumeration, and `--fault-tolerant-enums` maps a value the specification
+  did not list to `unrecognized` instead of failing the record.
 - *Keyword constructors.* `(make-pet #:id 7 #:name "Rex")` — a schema with
   eleven properties is unreadable with positional arguments, and a missing
   required one is reported by name.
@@ -65,7 +73,9 @@ Five seconds, one table:
   Artanis adapter is a thin translation layer over the same code.
 - *Two HTTP clients, one shape.* `client-send` is the only procedure that differs
   between plain Guile (`(web client)`) and libcurl (`guile-curl`); credentials,
-  URL building, status checking and decoding are shared.
+  URL building, status checking and decoding are shared.  The media type the
+  specification declares decides whether a body is JSON, text, a form, multipart
+  or bytes, and the same rule decodes the response.
 - *Auth from the specification.* The security schemes become a literal alist, each
   operation carries the requirements that authorise it, and `authenticate` turns
   an `<auth>` into the headers and query parameters that express it.
@@ -242,6 +252,12 @@ Usage: openapi-generator generate --input SPEC --output DIR [options]
   --api-fragment VALUE          Merge a partial OpenAPI document into the primary one.
   --auth VALUE                  Send 'Name: value' on remote fetches; repeatable.
   --resolve-external VALUE      none, targeted or aggressive external $ref resolution.
+  --request-response-models     Emit Request and Response model sets.
+  --exclude-read-only           Drop readOnly properties from the single model set.
+  --exclude-write-only          Drop writeOnly properties from the single model set.
+  --x-extensible-enums          Treat x-extensible-enum(s) as enumerations.
+  --fault-tolerant-enums        Map unknown string enum values to 'unrecognized'.
+  --non-null-response-payloads  Fail when a declared success body is missing or null.
 #+end_example
 
 An unknown value is an error rather than a silent fallback: a typo in
@@ -262,6 +278,9 @@ modelSuffix: Dto
 operation-id-transform: '^V2_(.*)$:v2-\1'
 resolve-external: targeted
 auth: ['Authorization: Bearer ${API_TOKEN}']
+requestResponseModels: true
+fault-tolerant-enums: true
+nonNullResponsePayloads: true
 header: true
 header-file: LICENSE-HEADER.txt
 dependencies: guix
@@ -306,6 +325,60 @@ controller always brings the models those need.  =--dependencies guix= writes a
 - *Server variables.* A server URL such as
   =https://{region}.example.com/{version}= is expanded with each variable's
   declared default, so the generated client starts from a usable base URL.
+
+** Directional models and enumerations
+
+OpenAPI marks a property =readOnly= when only a response carries it, and
+=writeOnly= when only a request does.  The default remains one model set, and a
+directional member is optional there because a single record cannot satisfy both
+directions; =--exclude-read-only= and =--exclude-write-only= drop one category
+instead.
+
+=--request-response-models= emits two sets in one module.  Component names gain
+=Request=/=Response= after any =--model-suffix=, and the members each direction
+cannot carry are gone: a request model has no =readOnly= property, a response
+model no =writeOnly= one.  The generated client sends request models and decodes
+response models; the controllers decode request models.  A nested inline model
+keeps the suffix of the component it belongs to (=PetRequest-detail=), so the
+two sets never share a definition.
+
+=--x-extensible-enums= treats =x-extensible-enum= (and the plural spelling) as an
+enumeration; by default the extension is ignored, because an extensible enum is
+supposed to tolerate values the specification does not list.  For the same
+reason, =--fault-tolerant-enums= gives a string enumeration an =unrecognized=
+value and maps unknown strings to it, so a server that adds a value does not take
+the whole record down; without it an unknown value still fails validation.
+
+A discriminator does not have to be repeated on the =oneOf= that collects the
+children: when it is declared on the parent they share through =allOf=, the
+generated union decoder finds it there.
+
+** Media types and response headers
+
+The media type a request or response declares decides how its body is encoded,
+and the generated client and controllers follow it:
+
+| Media type                               | Request                                                        | Response              |
+|------------------------------------------+----------------------------------------------------------------+-----------------------|
+| =application/json=, =+json=              | a record as JSON                                               | decoded as JSON       |
+| =text/plain=                             | a string                                                       | a string              |
+| =application/x-www-form-urlencoded=      | an object as form fields                                       | decoded as form fields |
+| =multipart/form-data=                    | a record as parts; a string with =format: binary= is a file part | raw bytes             |
+| anything else                            | bytes                                                          | bytes                 |
+
+A form body is encoded with =query-string=, so its fields are strings; a
+controller decodes it with =parse-query= and then through the model constructor,
+which means numeric form fields are not coerced and should be declared as
+strings.  A multipart request is built by the client with a boundary that is the
+same in the body and in the =Content-Type= header; controllers receive the raw
+body rather than a half-decoded multipart value.  The client sets =Accept= from
+the response media type, so the server's choice and the client's decoder agree.
+
+=--non-null-response-payloads= makes a declared success body mandatory: an empty
+or null body raises =openapi-empty-body= instead of decoding to =#f=.  Declared
+response headers are readable through a generated
+=OPERATION-response-headers= helper, and the runtime offers =text-response=,
+=binary-response= and =http-response-header= for handlers that need them.
 
 ** From Scheme instead
 
@@ -354,6 +427,12 @@ Every flag has a keyword argument, and the same run is a function call:
 | =#:api-fragments=   | ='()=        | partial OpenAPI documents merged into the primary one       |
 | =#:headers=         | ='()=        | headers sent on remote fetches and remote =$ref=s           |
 | =#:resolve-external= | ='none=     | =none=, =targeted= or =aggressive= external reference mode   |
+| =#:request-response-models?= | =#f= | emit separate Request and Response model sets               |
+| =#:exclude-read-only?= | =#f=      | drop readOnly properties from the single model set          |
+| =#:exclude-write-only?= | =#f=     | drop writeOnly properties from the single model set         |
+| =#:x-extensible-enums?= | =#f=     | treat x-extensible-enum(s) as enumerations                  |
+| =#:fault-tolerant-enums?= | =#f=   | map unknown string enum values to =unrecognized=            |
+| =#:non-null-response-payloads?= | =#f= | fail when a declared success body is missing or null     |
 
 * What gets generated
 
@@ -570,6 +649,7 @@ guile-openapi-generator/
 │   ├── config-file.scm   options read from a YAML/JSON config file
 │   ├── json-schema.scm   a JSON Schema document wrapped as OpenAPI
 │   ├── bundle.scm        external $ref resolution into one document
+│   ├── transforms.scm    opt-in document rewrites (extensible enums)
 │   ├── spec.scm          operations, parameters, responses, security
 │   ├── schema.scm        what a schema means: records, enums, unions, maps
 │   ├── naming.scm        specification names -> Scheme names
@@ -639,7 +719,7 @@ guix shell guile guile-json guile-curl guile-fibers -- \
 
 ** Tests
 
-Fourteen Veritas suites, well over three hundred assertions, in three layers:
+Sixteen Veritas suites, well over three hundred assertions, in three layers:
 
 - *Reading*: the YAML reader (scalars, collections, block scalars, anchors,
   markers), the value representation and merge patch, format detection, and the
@@ -662,6 +742,14 @@ Fourteen Veritas suites, well over three hundred assertions, in three layers:
   An *input* suite covers where a document comes from: JSON Schema conversion,
   API fragments, external references (including cycles) and a remote
   specification fetched with authentication.
+
+  A *directional* suite covers what a model means in each direction: request and
+  response sets, readOnly/writeOnly exclusion, extensible and fault-tolerant
+  enumerations, and a discriminator inherited from a composition parent.
+
+  A *media* suite runs the generated client and dispatcher across JSON, text,
+  bytes, forms, multipart and declared response headers, and checks the
+  non-null payload option.
 
 The generated trees are left in place, because a failing test should be
 inspectable; they are git-ignored.

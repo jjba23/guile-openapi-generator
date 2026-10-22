@@ -1,0 +1,88 @@
+# A schema used in both directions.  `id` and `nickname` are read-only, so a
+# request cannot carry them; `password` is write-only, so a response must not
+# return it.
+openapi: 3.0.3
+info:
+  title: Directional
+  version: 1.0.0
+paths:
+  /accounts:
+    post:
+      operationId: createAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Account'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+  /accounts/{accountId}:
+    parameters:
+      - name: accountId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getAccount
+      responses:
+        '200':
+          description: The account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+  /profiles:
+    post:
+      operationId: createProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [handle]
+              properties:
+                handle:
+                  type: string
+                secret:
+                  type: string
+                  writeOnly: true
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: string
+                    readOnly: true
+                  handle:
+                    type: string
+components:
+  schemas:
+    Account:
+      type: object
+      required: [id, name, password]
+      properties:
+        id:
+          type: string
+          readOnly: true
+        name:
+          type: string
+        password:
+          type: string
+          writeOnly: true
+          minLength: 8
+        nickname:
+          type: string
+          readOnly: true

@@ -118,6 +118,9 @@
             operation-response-for-status
             operation-success-response
             operation-request-media-type
+            operation-response-media-type
+            media-type-json?
+            media-type-kind
             parameters-by-location
             security-schemes-by-name))
 
@@ -599,13 +602,35 @@ An exact code among @code{200}, @code{201}, @code{202}, @code{204},
                              "default"))
               responses))))
 
+(define (media-type-json? media-type)
+  "Return @code{#t} when @var{media-type} is JSON or a @code{+json} type."
+  (let ((name (string-downcase (media-type-name media-type))))
+    (or (string=? name "application/json")
+        (string-suffix? "+json" name))))
+
+(define (media-type-kind media-type)
+  "Return how @var{media-type} is encoded: @code{json}, @code{text},
+@code{form}, @code{multipart} or @code{binary}."
+  (let ((name (string-downcase (media-type-name media-type))))
+    (cond
+      ((media-type-json? media-type) 'json)
+      ((string=? name "text/plain") 'text)
+      ((string=? name "application/x-www-form-urlencoded") 'form)
+      ((string=? name "multipart/form-data") 'multipart)
+      (else 'binary))))
+
 (define (operation-request-media-type operation)
   "Return the preferred media type of the request body of @var{operation}."
   (let ((body (operation-request-body operation)))
     (and body
          (let ((media-types (request-body-media-types body)))
-           (or (find (lambda (media-type)
-                       (string=? (media-type-name media-type)
-                                 "application/json"))
-                     media-types)
+           (or (find media-type-json? media-types)
+               (and (pair? media-types) (car media-types)))))))
+
+(define (operation-response-media-type operation)
+  "Return the preferred media type of the success response of @var{operation}."
+  (let ((response (operation-success-response operation)))
+    (and response
+         (let ((media-types (response-media-types response)))
+           (or (find media-type-json? media-types)
                (and (pair? media-types) (car media-types)))))))

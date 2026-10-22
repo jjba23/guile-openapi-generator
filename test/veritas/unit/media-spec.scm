@@ -1,0 +1,294 @@
+;; guile-openapi-generator
+
+;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
+
+;; guile-openapi-generator is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU Affero General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; guile-openapi-generator is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU Affero General Public License for more details.
+
+;; You should have received a copy of the GNU Affero General Public License
+;; along with guile-openapi-generator.  If not, see <https://www.gnu.org/licenses/>.
+
+;;; Commentary:
+;;
+;; The transport slice: a client and a dispatcher that speak JSON, text, bytes,
+;; forms and multipart, plus declared response headers and the non-null payload
+;; option.  The generated client runs in a child process against a server this
+;; file starts, because the point is the bytes on the wire as much as the value
+;; the caller receives.
+
+(define-module (veritas unit media-spec)
+  #:declarative? #t
+  #:use-module (veritas veritas)
+  #:use-module (ice-9 format)
+  #:use-module (ice-9 threads)
+  #:use-module (srfi srfi-1)
+  #:use-module (srfi srfi-13)
+  #:use-module (rnrs bytevectors)
+  #:use-module (web server)
+  #:use-module (web request)
+  #:use-module (web response)
+  #:use-module (web uri)
+  #:use-module (openapi-generator runtime)
+  #:use-module (openapi-support)
+  #:export (spec))
+
+;;; Helpers
+
+(define (lines output)
+  (filter (lambda (line) (not (string-null? line)))
+          (map string-trim-both (string-split output #\newline))))
+
+(define (json-result status text)
+  (values (build-response #:code status
+                          #:headers '((content-type . (application/json))))
+          text))
+
+(define (text-result status text)
+  (values (build-response #:code status
+                          #:headers '((content-type . (text/plain))))
+          text))
+
+(define (binary-result status text)
+  (values (build-response #:code status
+                          #:headers '((content-type . (application/octet-stream))))
+          text))
+
+;;; Server
+
+(define requests '())
+
+(define (header-text request name)
+  (let ((entry (assq name (request-headers request))))
+    (if entry (format #f "~a" (cdr entry)) "")))
+
+(define (body-text body)
+  "Return the request BODY as text, whether it arrived as a string or bytes."
+  (cond
+    ((string? body) body)
+    ((bytevector? body) (utf8->string body))
+    (else "")))
+
+(define (handler request body)
+  (let ((path (uri-path (request-uri request)))
+        (method (request-method request))
+        (body (body-text body)))
+    (set! requests
+          (cons (list method path (header-text request 'content-type) body)
+                requests))
+    (cond
+      ((and (eq? method 'GET) (string=? path "/plain"))
+       (text-result 200 "hello"))
+      ((and (eq? method 'POST) (string=? path "/echo-plain"))
+       (text-result 200 body))
+      ((and (eq? method 'GET) (string=? path "/download"))
+       (binary-result 200 "abc"))
+      ((and (eq? method 'POST) (string=? path "/upload"))
+       (text-result 200 (number->string (string-length body))))
+      ((and (eq? method 'POST) (string=? path "/form"))
+       (let* ((query (parse-query body))
+              (name (or (cdr (assoc "name" query)) "")))
+         (json-result 200 (format #f "{\"message\":\"~a\"}" name))))
+      ((and (eq? method 'POST) (string=? path "/multipart"))
+       (json-result
+        200
+        (if (and (string-contains body "name=\"title\"")
+                 (string-contains body "name=\"file\"; filename="))
+            "{\"message\":\"multipart\"}"
+            "{\"message\":\"bad\"}")))
+      ((and (eq? method 'GET) (string=? path "/headers"))
+       (values (build-response #:code 200
+                               #:headers '((content-type . (application/json))
+                                           (x-rate-limit . "42")
+                                           (x-request-id . "abc")))
+               "{\"message\":\"headers\"}"))
+      ((and (eq? method 'GET) (string=? path "/empty"))
+       (values (build-response #:code 200
+                               #:headers '((content-type . (application/json))))
+               ""))
+      (else (values (build-response #:code 404) "")))))
+
+(define base-port
+  (+ 9800 (modulo (getpid) 200)))
+
+(define next-port base-port)
+
+(define (take-port)
+  (let ((port next-port))
+    (set! next-port (+ port 1))
+    port))
+
+(define (port-open? port)
+  (catch #t
+    (lambda ()
+      (let ((connection (socket PF_INET SOCK_STREAM 0)))
+        (connect connection
+                 (make-socket-address AF_INET
+                                      (inet-pton AF_INET "127.0.0.1")
+                                      port))
+        (close connection)
+        #t))
+    (lambda (key . arguments) #f)))
+
+(define (wait-for-server port)
+  (let loop ((attempts 0))
+    (cond
+      ((port-open? port) #t)
+      ((> attempts 200)
+       (error "The media test server never accepted a connection" port))
+      (else (usleep 25000) (loop (+ attempts 1))))))
+
+(define (with-server thunk)
+  (let* ((port (take-port))
+         (thread (call-with-new-thread
+                  (lambda ()
+                    (catch #t
+                      (lambda ()
+                        (run-server handler 'http (list #:port port
+                                                        #:host "127.0.0.1")))
+                      (lambda (key . arguments) #f))))))
+    (wait-for-server port)
+    (dynamic-wind
+      (lambda () #t)
+      (lambda () (thunk port))
+      (lambda ()
+        (when (thread? thread)
+          (cancel-thread thread))))))
+
+(define (request-for method path)
+  (find (lambda (entry)
+          (and (eq? (car entry) method)
+               (string=? (cadr entry) path)))
+        requests))
+
+;;; Suites
+
+(define runtime-suite
+  (suite "Transport helpers"
+         (test "A response header is read without case"
+               (assert-equal
+                #:expect "v"
+                #:got (http-response-header
+                       (make-http-response 200 '(("X-Test" . "v")) "")
+                       "x-test")))
+         (test "Text and binary responses set their content type"
+               (assert-true
+                (if (string-contains
+                     (header-ref (http-response-headers (text-response 200 "x"))
+                                 "Content-Type")
+                     "text/plain")
+                    #t
+                    #f))
+               (assert-true
+                (if (string-contains
+                     (header-ref (http-response-headers
+                                  (binary-response 200 "x"))
+                                 "Content-Type")
+                     "application/octet-stream")
+                    #t
+                    #f)))
+         (test "A multipart body has a boundary and a part per value"
+               (let ((body (multipart-body
+                            (list (multipart-part "a" "1")
+                                  (multipart-part "file" "data" "file.bin"))
+                            #:boundary "B")))
+                 (assert-true (contains? body "--B"))
+                 (assert-true (contains? body "name=\"a\""))
+                 (assert-true (contains? body "name=\"file\"; filename=\"file.bin\""))
+                 (assert-true (contains? body "data"))))
+         (test "A required body is enforced"
+               (assert-eq #:expect 'value
+                          #:got (require-body 'value
+                                              (make-http-response 200 '() "")))
+               (assert-equal
+                #:expect 200
+                #:got (catch 'openapi-empty-body
+                        (lambda ()
+                          (require-body #f (make-http-response 200 '() ""))
+                          'decoded)
+                        (lambda (key status body) status))))))
+
+(define client-suite
+  (suite "A client across media types"
+         #:concurrent? #f
+
+         (test "Text, bytes, forms, multipart and headers travel end to end"
+               (set! requests '())
+               (with-server
+                (lambda (port)
+                  (with-generated 'media-client
+                    (lambda (directory)
+                      (let ((output
+                             (run-program
+                              directory
+                              (list '(media-client client)
+                                    '(media-client models))
+                              "media-client"
+                              #:bindings
+                              (list (cons 'base-url
+                                          (format #f "~s"
+                                                  (format #f "http://127.0.0.1:~a"
+                                                          port)))))))
+                        (assert-equal
+                         #:expect '("hello" "hello" "3" "3" "Ada"
+                                    "multipart" "42" "abc" "200")
+                         #:got (lines output))))
+                    #:input (fixture "media.yaml")
+                    #:controllers 'none
+                    #:http 'guile
+                    #:non-null-response-payloads? #t)
+                  (let ((plain (request-for 'POST "/echo-plain"))
+                        (upload (request-for 'POST "/upload"))
+                        (form (request-for 'POST "/form"))
+                        (multipart (request-for 'POST "/multipart")))
+                    (when plain
+                      (assert-true
+                       (if (string-contains (caddr plain) "text/plain")
+                           #t
+                           #f)))
+                    (when upload
+                      (assert-true
+                       (if (string-contains (caddr upload)
+                                            "application/octet-stream")
+                           #t
+                           #f)))
+                    (when form
+                      (assert-true
+                       (if (string-contains (caddr form)
+                                            "application/x-www-form-urlencoded")
+                           #t
+                           #f)))
+                    (when multipart
+                      (assert-true
+                       (if (string-contains (caddr multipart)
+                                            "multipart/form-data")
+                           #t
+                           #f)))))))))
+
+(define controllers-suite
+  (suite "A dispatcher across media types"
+         #:concurrent? #f
+
+         (test "Text and form bodies are decoded by media type"
+               (with-generated 'media-controllers
+                 (lambda (directory)
+                   (assert-equal
+                    #:expect '("hello" "Ada")
+                    #:got (lines (run-program
+                                  directory
+                                  (list '(media-controllers controllers)
+                                        '(media-controllers models))
+                                  "media-controllers"))))
+                 #:input (fixture "media.yaml")
+                 #:controllers 'vanilla
+                 #:http 'none))))
+
+(define (spec)
+  (veritas-run #:concurrent? #f
+               runtime-suite client-suite controllers-suite))

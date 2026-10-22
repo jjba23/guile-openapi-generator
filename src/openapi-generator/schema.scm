@@ -79,12 +79,15 @@
             property-schema
             property-description
             property-default
+            property-read-only?
+            property-write-only?
             ;; registry
             <registry> registry? make-registry
             registry-for-spec
             registry-name
             registry-named-schemas
             registry-register!
+            registry-policy
             new-registry
             ;; shape construction
             schema-shape
@@ -175,7 +178,8 @@
   (eq? (shape-kind shape) 'any))
 
 (define-record-type <property>
-  (make-property name field shape required? schema description default)
+  (make-property name field shape required? schema description default
+                 read-only? write-only?)
   property?
   (name property-name)
   (field property-field)
@@ -183,19 +187,22 @@
   (required? property-required?)
   (schema property-schema)
   (description property-description)
-  (default property-default))
+  (default property-default)
+  (read-only? property-read-only?)
+  (write-only? property-write-only?))
 
 ;;; Commentary:
 ;;; Registry
 
 (define-record-type <registry>
-  (make-registry table names)
+  (make-registry table names policy)
   registry?
   (table registry-table)
-  (names registry-names set-registry-names!))
+  (names registry-names set-registry-names!)
+  (policy registry-policy))
 
-(define (new-registry)
-  (make-registry (make-hash-table) '()))
+(define* (new-registry #:optional (policy 'all))
+  (make-registry (make-hash-table) '() policy))
 
 (define (registry-name registry node)
   "Return the generated name of the schema @var{node}, or #f."
@@ -216,7 +223,8 @@ components first, in the order they were registered."
                                             (registry-names registry)))
         name)))
 
-(define* (registry-for-spec spec #:key (extra-names? #t) (model-suffix ""))
+(define* (registry-for-spec spec #:key (extra-names? #t) (model-suffix "")
+                            (direction-suffix "") (policy 'all))
   "Return the registry naming every record the generator has to emit for @var{spec}.
 
 The component schemas keep their specification names; inline schemas are named
@@ -226,12 +234,25 @@ after the place they appear in: @code{create-pet-request},
 @var{model-suffix} is appended to every model name at the point it enters the
 registry, so a reference to a schema and the definition of that schema always
 agree.  A nested inline model keeps the suffix of the model it was named after,
-which is what keeps a second specification in the same namespace apart."
-  (let ((registry (new-registry)))
+which is what keeps a second specification in the same namespace apart.
+
+@var{direction-suffix} is appended to component names only: an operation's
+inline request and response models already say which direction they belong to,
+and appending @code{Request} to @code{create-pet-request} would read as a
+stutter rather than as information.
+
+@var{policy} decides which properties survive: @code{all} keeps every property
+(but makes @code{readOnly} and @code{writeOnly} ones optional), @code{request}
+drops @code{readOnly} properties and @code{response} drops @code{writeOnly}
+ones.  The @code{exclude-read-only}, @code{exclude-write-only} and
+@code{exclude-both} policies are the single-set spellings of the same idea."
+  (let ((registry (new-registry policy)))
     (for-each (lambda (schema)
                 (registry-register!
                  registry
-                 (string-append (named-schema-name schema) model-suffix)
+                 (string-append (named-schema-name schema)
+                                model-suffix
+                                direction-suffix)
                  (named-schema-schema schema)))
               (spec-schemas spec))
     (when extra-names?
@@ -250,43 +271,56 @@ which is what keeps a second specification in the same namespace apart."
       base
       (string-append base suffix)))
 
+(define (registry-includes-requests? registry)
+  "Return @code{#t} when @var{registry} describes request payloads."
+  (memq (registry-policy registry)
+        '(all request exclude-read-only exclude-write-only exclude-both)))
+
+(define (registry-includes-responses? registry)
+  "Return @code{#t} when @var{registry} describes response payloads."
+  (memq (registry-policy registry)
+        '(all response exclude-read-only exclude-write-only exclude-both)))
+
 (define (register-operation! registry operation model-suffix)
   (let ((name (symbol->string (operation-name operation))))
-    (let ((media-type (operation-request-media-type operation)))
-      (when (and media-type (inline-object? (media-type-schema media-type)))
-        (registry-register! registry
-                            (model-name (string-append name "-request")
-                                        model-suffix)
-                            (media-type-schema media-type))))
-    (for-each (lambda (response)
-                (for-each (lambda (media-type)
-                            (let ((schema (media-type-schema media-type)))
-                              (when (inline-object? schema)
-                                (registry-register!
-                                 registry
-                                 (model-name
-                                  (if (member (response-status response)
-                                              '("200" "default"))
-                                      (string-append name "-response")
-                                      (string-append name "-"
-                                                     (response-status response)
-                                                     "-response"))
-                                  model-suffix)
-                                 schema))))
-                          (response-media-types response)))
-              (operation-responses operation))
-    (for-each (lambda (parameter)
-                (let ((schema (parameter-schema parameter)))
-                  (when (and (jso-object? schema)
-                             (jso-ref schema "properties"))
-                    (registry-register! registry
-                                        (model-name
-                                         (string-append name "-"
-                                                        (symbol->string
-                                                         (parameter-field parameter)))
-                                         model-suffix)
-                                        schema))))
-              (operation-parameters operation))))
+    (when (registry-includes-requests? registry)
+      (let ((media-type (operation-request-media-type operation)))
+        (when (and media-type (inline-object? (media-type-schema media-type)))
+          (registry-register! registry
+                              (model-name (string-append name "-request")
+                                          model-suffix)
+                              (media-type-schema media-type)))))
+    (when (registry-includes-responses? registry)
+      (for-each (lambda (response)
+                  (for-each (lambda (media-type)
+                              (let ((schema (media-type-schema media-type)))
+                                (when (inline-object? schema)
+                                  (registry-register!
+                                   registry
+                                   (model-name
+                                    (if (member (response-status response)
+                                                '("200" "default"))
+                                        (string-append name "-response")
+                                        (string-append name "-"
+                                                       (response-status response)
+                                                       "-response"))
+                                    model-suffix)
+                                   schema))))
+                            (response-media-types response)))
+                (operation-responses operation)))
+    (when (registry-includes-requests? registry)
+      (for-each (lambda (parameter)
+                  (let ((schema (parameter-schema parameter)))
+                    (when (and (jso-object? schema)
+                               (jso-ref schema "properties"))
+                      (registry-register! registry
+                                          (model-name
+                                           (string-append name "-"
+                                                          (symbol->string
+                                                           (parameter-field parameter)))
+                                           model-suffix)
+                                          schema))))
+                (operation-parameters operation)))))
 
 (define* (register-nested! registry name node #:optional (depth 0))
   "Register the inline objects nested in @var{node} under names derived from
@@ -452,24 +486,57 @@ needs."
         (schema-shape document schema #:registry registry)
         (make-shape 'any #f #f #f '() #f '() '() #f '() '() #f))))
 
+(define (policy-includes-property? policy read-only? write-only?)
+  "Return @code{#t} when @var{policy} keeps a property with these flags."
+  (case policy
+    ((request exclude-read-only) (not read-only?))
+    ((response exclude-write-only) (not write-only?))
+    ((exclude-both) (not (or read-only? write-only?)))
+    (else #t)))
+
+(define (policy-keeps-required? policy declared? read-only? write-only?)
+  "Return @code{#t} when the property is still required under @var{policy}.
+
+With one model set, a @code{readOnly} or @code{writeOnly} member cannot be
+required: a request cannot satisfy a read-only member and a response cannot
+satisfy a write-only one.  A directional set excludes the members that do not
+belong and keeps the declared requiredness of the ones that do."
+  (and declared?
+       (if (eq? policy 'all)
+           (not (or read-only? write-only?))
+           #t)))
+
 (define (shape-properties-of document node registry)
-  "Return the properties of the object @var{node}, required ones marked."
+  "Return the properties of the object @var{node}, required ones marked.
+
+The registry's policy decides which properties survive and whether a directional
+member counts as required, so the same raw schema becomes the right shape for
+the model set being built."
   (let* ((properties (jso-ref node "properties"))
          (required (map (lambda (element)
                           (if (string? element) element (format #f "~a" element)))
-                        (jso-array->list (jso-ref node "required")))))
-    (map (lambda (entry)
-           (let* ((name (car entry))
-                  (schema (cdr entry))
-                  (resolved (resolve-ref document schema)))
-             (make-property name
-                            (string->symbol (identifier name))
-                            (schema-shape document schema #:registry registry)
-                            (if (member name required) #t #f)
-                            resolved
-                            (jso-ref resolved "description")
-                            (jso-ref resolved "default"))))
-         (if (jso-object? properties) properties '()))))
+                        (jso-array->list (jso-ref node "required"))))
+         (policy (if registry (registry-policy registry) 'all)))
+    (filter-map
+     (lambda (entry)
+       (let* ((name (car entry))
+              (schema (cdr entry))
+              (resolved (resolve-ref document schema))
+              (read-only? (jso-true? (jso-ref resolved "readOnly")))
+              (write-only? (jso-true? (jso-ref resolved "writeOnly")))
+              (declared? (and (member name required) #t)))
+         (and (policy-includes-property? policy read-only? write-only?)
+              (make-property name
+                             (string->symbol (identifier name))
+                             (schema-shape document schema #:registry registry)
+                             (policy-keeps-required? policy declared?
+                                                     read-only? write-only?)
+                             resolved
+                             (jso-ref resolved "description")
+                             (jso-ref resolved "default")
+                             read-only?
+                             write-only?))))
+     (if (jso-object? properties) properties '()))))
 
 (define (shape-from-all-of document node registry)
   "Flatten @code{allOf} into a single object shape.
@@ -505,13 +572,38 @@ branch's constraints through the merged properties."
                 '() #f '() node
                 (schema-nullable? document node))))
 
+(define (inherited-discriminator document branches)
+  "Return a discriminator declared by a common @code{allOf} parent of @var{branches}.
+
+The composition style the specification documents puts the discriminator on the
+parent schema and lists the children through @code{allOf}; the @code{oneOf} that
+collects them need not repeat it.  The first branch that names such a parent
+decides, because a hierarchy has one discriminator."
+  (let loop ((rest (jso-array->list branches)))
+    (if (null? rest)
+        #f
+        (let* ((branch (resolve-ref document (car rest)))
+               (direct (jso-ref branch "discriminator"))
+               (all-of (jso-array->list (jso-ref branch "allOf")))
+               (parent (find (lambda (member)
+                               (let ((resolved (resolve-ref document member)))
+                                 (jso-object? (jso-ref resolved
+                                                       "discriminator"))))
+                             all-of)))
+          (or (and (jso-object? direct) direct)
+              (and parent
+                   (let ((resolved (resolve-ref document parent)))
+                     (jso-ref resolved "discriminator")))
+              (loop (cdr rest)))))))
+
 (define (shape-from-union document node registry)
   "Build a @code{oneOf}/{@code{anyOf} shape, discriminated when possible."
   (let* ((raw (or (jso-ref node "oneOf") (jso-ref node "anyOf")))
          (branches (map (lambda (branch)
                           (schema-shape document branch #:registry registry))
                         (jso-array->list raw)))
-         (discriminator (jso-ref node "discriminator"))
+         (discriminator (or (jso-ref node "discriminator")
+                            (inherited-discriminator document raw)))
          (property-name (and (jso-object? discriminator)
                              (jso-ref discriminator "propertyName")))
          (mapping (and (jso-object? discriminator)

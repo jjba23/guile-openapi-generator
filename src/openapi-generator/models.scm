@@ -85,6 +85,9 @@
             make-context
             context-document
             context-registry
+            context-request-registry
+            context-response-registry
+            context-config
             unbox-expression
             box-expression
             schema-predicate
@@ -95,10 +98,13 @@
 ;;; Context
 
 (define-record-type <context>
-  (%make-context document registry required used config)
+  (%make-context document registry request-registry response-registry
+                 required used config)
   context?
   (document context-document)
   (registry context-registry)
+  (request-registry context-request-registry)
+  (response-registry context-response-registry)
   (required context-required)
   (used context-used)
   (config context-config))
@@ -106,24 +112,61 @@
 (define (make-context spec config)
   "Collect what the emitters need to look at while they walk the schemas."
   (let* ((document (spec-raw spec))
-         (registry (registry-for-spec spec
-                                      #:model-suffix
-                                      (or (config-model-suffix config) "")))
+         (base-suffix (or (config-model-suffix config) ""))
+         (directional? (config-request-response-models? config))
+         (single-policy (cond ((and (config-exclude-read-only? config)
+                                    (config-exclude-write-only? config))
+                               'exclude-both)
+                              ((config-exclude-read-only? config)
+                               'exclude-read-only)
+                              ((config-exclude-write-only? config)
+                               'exclude-write-only)
+                              (else 'all)))
+         (request-policy (if directional?
+                             (if (config-exclude-write-only? config)
+                                 'exclude-both
+                                 'request)
+                             single-policy))
+         (response-policy (if directional?
+                              (if (config-exclude-read-only? config)
+                                  'exclude-both
+                                  'response)
+                              single-policy))
+         (request-registry
+          (registry-for-spec spec
+                             #:model-suffix base-suffix
+                             #:direction-suffix (if directional?
+                                                    "Request"
+                                                    "")
+                             #:policy request-policy))
+         (response-registry
+          (if directional?
+              (registry-for-spec spec
+                                 #:model-suffix base-suffix
+                                 #:direction-suffix "Response"
+                                 #:policy response-policy)
+              request-registry))
          (required (make-hash-table)))
-    (for-each (lambda (entry)
-                (let* ((name (car entry))
-                       (node (cdr entry))
-                       (shape (schema-shape document node
-                                            #:registry registry
-                                            #:named? #f)))
-                  (when (object-shape? shape)
-                    (hash-set! required
-                               name
-                               (map property-name
-                                    (filter property-required?
-                                            (shape-properties shape)))))))
-              (registry-named-schemas registry))
-    (%make-context document registry required (make-hash-table) config)))
+    (for-each
+     (lambda (registry)
+       (for-each (lambda (entry)
+                   (let* ((name (car entry))
+                          (node (cdr entry))
+                          (shape (schema-shape document node
+                                               #:registry registry
+                                               #:named? #f)))
+                     (when (object-shape? shape)
+                       (hash-set! required
+                                  name
+                                  (map property-name
+                                       (filter property-required?
+                                               (shape-properties shape)))))))
+                 (registry-named-schemas registry)))
+     (if directional?
+         (list request-registry response-registry)
+         (list request-registry)))
+    (%make-context document request-registry request-registry response-registry
+                   required (make-hash-table) config)))
 
 ;;; Commentary:
 ;;; Naming
@@ -226,11 +269,19 @@ digit still produces the constant the export list advertises."
   "Return the form of a predicate that recognises @var{shape}.
 
 A named shape is recognised by the predicate generated for it; a scalar by the
-procedure that tests its type; anything else by a lambda, which is the one case
-where nothing more specific can be said about the value."
+procedure that tests its type; an anonymous union by a disjunction of its
+branches; anything else by a lambda, which is the one case where nothing more
+specific can be said about the value."
   (case (shape-kind shape)
-    ((record enum union)
+    ((record enum)
      (predicate-symbol (identifier (component-name shape))))
+    ((union)
+     (if (shape-name shape)
+         (predicate-symbol (identifier (component-name shape)))
+         `(lambda (value)
+            (or ,@(map (lambda (branch)
+                         (list (schema-predicate ctx branch) 'value))
+                       (shape-branches shape))))))
     ((scalar)
      (case (or (shape-type shape) 'string)
        ((string) 'string?)
@@ -245,7 +296,12 @@ where nothing more specific can be said about the value."
 (define (schema-display-name shape)
   "Return a human readable name for @var{shape}, for error messages."
   (case (shape-kind shape)
-    ((record union) (component-name shape))
+    ((record) (component-name shape))
+    ((union)
+     (if (shape-name shape)
+         (component-name shape)
+         (format #f "one of ~{~a~^, ~}"
+                 (map schema-display-name (shape-branches shape)))))
     ((enum)
      (if (shape-name shape)
          (component-name shape)
@@ -558,6 +614,18 @@ one is spelled out, because there is nothing to refer to."
       (values-symbol (identifier (shape-name shape)))
       (quoted (shape-values shape))))
 
+(define unrecognized-enum-value
+  "unrecognized")
+
+(define (fault-tolerant-enum? ctx shape)
+  "Return @code{#t} when unknown values of @var{shape} decode to a fallback.
+
+Only string enumerations get a fallback: an unknown integer cannot be represented
+by a string constant without lying about the type, so those keep the strict
+behaviour."
+  (and (config-fault-tolerant-enums? (context-config ctx))
+       (eq? (or (shape-type shape) 'string) 'string)))
+
 (define (enumeration-forms ctx shape base title)
   "Return the forms of an enumeration, in the order they are written.
 
@@ -565,20 +633,30 @@ An enumeration is the list of allowed values, one constant per value and a
 predicate that holds for exactly those values.  @var{base} is the name the
 enumeration is published under -- @code{pet-status} for the @code{status} property
 of @code{Pet} -- so the constants read @code{pet-status-available} and a caller
-that passes a typo gets a reader error rather than a validation error."
+that passes a typo gets a reader error rather than a validation error.
+
+When fault-tolerant enums are enabled, a string enumeration gains an
+@code{unrecognized} value and constant.  The decoder maps anything else to it, so
+a server that adds a value the specification did not know about does not take the
+whole record down."
   (let* ((symbol (identifier base))
          (values (values-symbol symbol))
          (type (case (or (shape-type shape) 'string)
                  ((integer) 'integer)
                  ((number) 'number)
-                 (else 'string))))
+                 (else 'string)))
+         (declared (shape-values shape))
+         (enum-values (if (and (fault-tolerant-enum? ctx shape)
+                               (not (member unrecognized-enum-value declared)))
+                          (append declared (list unrecognized-enum-value))
+                          declared)))
     (append
      (list `(define ,values
-              (list ,@(shape-values shape))))
+              (list ,@enum-values)))
      (map (lambda (value)
             `(define ,(constant-symbol symbol value)
                ,value))
-          (shape-values shape))
+          enum-values)
      (list
       `(define (,(predicate-symbol symbol) value)
          ,(format #f "Return #t when VALUE is one of the ~a values." title)
@@ -927,7 +1005,9 @@ component schema, that schema emits them itself and this stays out of the way."
         (let ((base (shape-name shape))
               (title (format #f "~a.~a" symbol (property-name property))))
           (append (enumeration-forms ctx shape base title)
-                  (enumeration-converter-forms (identifier base) title)))
+                  (enumeration-converter-forms
+                   (identifier base) title
+                   (fault-tolerant-enum? ctx shape))))
         '())))
 
 (define (component-schema? ctx name)
@@ -956,7 +1036,9 @@ name, and the property it belongs to is the most descriptive one available:
                               (property-required? property)
                               (property-schema property)
                               (property-description property)
-                              (property-default property))
+                              (property-default property)
+                              (property-read-only? property)
+                              (property-write-only? property))
                property)))
        properties))
 
@@ -1011,13 +1093,14 @@ generated file."
 ;;; Commentary:
 ;;; Named schemas that are not objects
 
-(define (enumeration-converter-forms symbol name)
+(define (enumeration-converter-forms symbol name fault-tolerant?)
   "Return the forms of the two converters of an enumeration.
 
 The encoding converter refuses a value outside the enumeration, so a jso is never
 written with a spelling the specification does not define; the decoding one stays
 lenient and lets the validator say what is wrong, because a decoder that throws
-hides which member was at fault."
+hides which member was at fault.  With @var{fault-tolerant?}, an unknown scalar
+decodes to the @code{unrecognized} constant instead of reaching the validator."
   (list `(define (,(encoder-symbol symbol) value)
            "Return VALUE as a jso scalar, after checking it."
            (if (,(predicate-symbol symbol) value)
@@ -1028,14 +1111,21 @@ hides which member was at fault."
                 value)))
         `(define (,(decoder-symbol symbol) node)
            ,(format #f "Read a ~a from the jso scalar NODE." name)
-           (if (json-null? node) #f node))))
+           ,(if fault-tolerant?
+                `(if (json-null? node)
+                     #f
+                     (if (member node ,(values-symbol symbol))
+                         node
+                         ,(constant-symbol symbol unrecognized-enum-value)))
+                `(if (json-null? node) #f node)))))
 
 (define (named-enumeration-forms ctx shape name)
   "Return the forms of a named enumeration: its values, its predicate and its
 converters."
   (let ((symbol (identifier name)))
     (append (enumeration-forms ctx shape symbol name)
-            (enumeration-converter-forms symbol name))))
+            (enumeration-converter-forms symbol name
+                                         (fault-tolerant-enum? ctx shape)))))
 
 (define (validating-predicate-form ctx shape symbol doc)
   "Return the form of a predicate that validates @var{shape} by running its checks.
@@ -1349,20 +1439,49 @@ is an implementation detail of the module."
                       imports)
           (list #:export exports)))
 
+(define (context-with-registry ctx registry)
+  "Return @var{ctx} with @var{registry} as the set it is emitting."
+  (%make-context (context-document ctx)
+                 registry
+                 registry
+                 (context-response-registry ctx)
+                 (context-required ctx)
+                 (context-used ctx)
+                 (context-config ctx)))
+
+(define (model-set-data ctx)
+  "Return @code{(ctx models exports)} for one model set."
+  (let ((models (prepare-models ctx)))
+    (list ctx
+          models
+          (append-map (lambda (entry)
+                        (model-exports ctx (car entry) (cdr entry)))
+                      models))))
+
 (define (emit-models spec config)
   "Return the source text of the models module of @var{spec}.
 
 The module name comes from @var{config}: with a root of @code{petstore} the
 module is @code{(petstore models)} and the file is @code{petstore/models.scm}.
 
+When @code{request-response-models} is set, the module holds two sets whose
+names carry @code{Request} and @code{Response}; each set is built from a registry
+with the matching property policy, so the two definitions of a schema differ in
+exactly the members that direction cannot carry.  Otherwise there is one set and
+the behaviour is what it always was.
+
 Every definition is built as a form and the file is rendered once, at the end, so
 this procedure is the whole of the layout: banner, module header, the record
 types, and then everything else."
   (let* ((ctx (make-context spec config))
-         (models (prepare-models ctx))
-         (exports (append-map (lambda (entry)
-                                (model-exports ctx (car entry) (cdr entry)))
-                              models)))
+         (sets (if (config-request-response-models? config)
+                   (list (context-with-registry
+                          ctx (context-request-registry ctx))
+                         (context-with-registry
+                          ctx (context-response-registry ctx)))
+                   (list ctx)))
+         (data (map model-set-data sets))
+         (exports (append-map caddr data)))
     (forms->string
      (append
       (header-forms config spec)
@@ -1372,13 +1491,21 @@ types, and then everything else."
                                '(srfi srfi-1)
                                '(srfi srfi-9))
                          exports))
-      ;; Record types first: a predicate referenced above its own
-      ;; define-record-type compiles to the syntax, not to the procedure.
-      (append-map (lambda (entry)
-                    (if (object-shape? (cdr entry))
-                        (list (record-type-form ctx (cdr entry) (car entry)))
-                        '()))
-                  models)
-      (append-map (lambda (entry)
-                    (schema-forms ctx (car entry) (cdr entry)))
-                  models)))))
+      (append-map
+       (lambda (entry)
+         (let ((set-ctx (car entry))
+               (models (cadr entry)))
+           (append
+            ;; Record types first: a predicate referenced above its own
+            ;; define-record-type compiles to the syntax, not to the procedure.
+            (append-map (lambda (model)
+                          (if (object-shape? (cdr model))
+                              (list (record-type-form set-ctx
+                                                      (cdr model)
+                                                      (car model)))
+                              '()))
+                        models)
+            (append-map (lambda (model)
+                          (schema-forms set-ctx (car model) (cdr model)))
+                        models))))
+       data)))))

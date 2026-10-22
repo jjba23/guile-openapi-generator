@@ -76,7 +76,13 @@
     (json-schema-root-name . "Name the schema generated from a JSON Schema's top level.")
     (api-fragment . "Merge a partial OpenAPI document into the primary one.")
     (auth . "Send 'Name: value' on remote fetches; repeatable.")
-    (resolve-external . "none, targeted or aggressive external $ref resolution.")))
+    (resolve-external . "none, targeted or aggressive external $ref resolution.")
+    (request-response-models . "Emit Request and Response model sets.")
+    (exclude-read-only . "Drop readOnly properties from the single model set.")
+    (exclude-write-only . "Drop writeOnly properties from the single model set.")
+    (x-extensible-enums . "Treat x-extensible-enum(s) as enumerations.")
+    (fault-tolerant-enums . "Map unknown string enum values to 'unrecognized'.")
+    (non-null-response-payloads . "Fail when a declared success body is missing or null.")))
 
 (define options
   '((help (single-char #\h))
@@ -101,7 +107,13 @@
     (json-schema-root-name (value #t))
     (api-fragment (value #t))
     (auth (value #t))
-    (resolve-external (value #t))))
+    (resolve-external (value #t))
+    (request-response-models)
+    (exclude-read-only)
+    (exclude-write-only)
+    (x-extensible-enums)
+    (fault-tolerant-enums)
+    (non-null-response-payloads)))
 
 (define (usage port)
   "Write the usage of the command to @var{port}."
@@ -279,6 +291,12 @@ and @code{--api-fragment}."
       (assq-ref parsed key)
       (config-ref config key default)))
 
+(define (flag-or-config parsed config key)
+  "Return @code{#t} when a boolean flag was given or the config file enables it."
+  (if (option-supplied? parsed key)
+      #t
+      (config-boolean (config-ref config key #f) #f)))
+
 (define (read-file-text path)
   "Return the contents of @var{path}, or @code{#f} when no path was given."
   (and path (call-with-input-file path get-string-all)))
@@ -354,6 +372,19 @@ written when it differs from the file."
                     (fragments (repeatable-values arguments config
                                                   'api-fragment
                                                   "--api-fragment"))
+                    (request-response-models?
+                     (flag-or-config parsed config 'request-response-models))
+                    (exclude-read-only?
+                     (flag-or-config parsed config 'exclude-read-only))
+                    (exclude-write-only?
+                     (flag-or-config parsed config 'exclude-write-only))
+                    (x-extensible-enums?
+                     (flag-or-config parsed config 'x-extensible-enums))
+                    (fault-tolerant-enums?
+                     (flag-or-config parsed config 'fault-tolerant-enums))
+                    (non-null-response-payloads?
+                     (flag-or-config parsed config
+                                     'non-null-response-payloads))
                     (output (resolve-option parsed config 'output "generated"))
                     (controllers-value (resolve-option parsed config
                                                        'controllers "vanilla"))
@@ -402,6 +433,15 @@ written when it differs from the file."
                                 #:api-fragments fragments
                                 #:headers headers
                                 #:resolve-external resolve-external
+                                #:request-response-models?
+                                request-response-models?
+                                #:exclude-read-only? exclude-read-only?
+                                #:exclude-write-only? exclude-write-only?
+                                #:x-extensible-enums? x-extensible-enums?
+                                #:fault-tolerant-enums?
+                                fault-tolerant-enums?
+                                #:non-null-response-payloads?
+                                non-null-response-payloads?
                                 #:output output
                                 #:module (resolve-option parsed config
                                                          'module #f)
