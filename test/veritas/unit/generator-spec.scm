@@ -29,6 +29,7 @@
   #:use-module (srfi srfi-1)
   #:use-module (srfi srfi-13)
   #:use-module (openapi-generator generator)
+  #:use-module (openapi-generator reader)
   #:use-module (openapi-generator cli)
   #:use-module (openapi-support)
   #:export (spec))
@@ -226,6 +227,35 @@ report is only useful for its keys and for the assertions made here."
                (assert-true (string? generator-version))
                (assert-false (string-null? generator-version)))))
 
+(define validation-suite
+  (suite "Validating the specification"
+         #:concurrent? #f
+         (test "#:validate? decides whether an in-memory document is checked"
+               (with-temporary-directory "validate"
+                 (lambda (directory)
+                   (let ((document (read-spec-string "swagger: '2.0'"
+                                                     #:validate? #f)))
+                     (assert-error
+                      (lambda ()
+                        (quiet (lambda ()
+                                 (generate #:document document
+                                           #:output directory
+                                           #:module "strict"))))
+                      #:name "a Swagger document is refused by default")
+                     (let ((report (quiet
+                                    (lambda ()
+                                      (generate #:document document
+                                                #:output directory
+                                                #:module "lax"
+                                                #:models? #f
+                                                #:controllers 'none
+                                                #:http 'none
+                                                #:validate? #f)))))
+                       (assert-equal #:expect '(readme)
+                                     #:got (map car report)
+                                     #:name "skipping validation still runs"))))))))
+
 (define (spec)
   (veritas-run #:concurrent? #f
-               report-suite self-contained-suite cli-suite version-suite))
+               report-suite self-contained-suite cli-suite version-suite
+               validation-suite))

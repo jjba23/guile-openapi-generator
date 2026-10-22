@@ -387,14 +387,21 @@ needs."
                    '() '() #f '() resolved
                    (schema-nullable? document resolved)))
       ((and (eq? (schema-type resolved) 'object)
-            (not (jso-object? (jso-ref resolved "properties")))
-            (jso-object? (jso-ref resolved "additionalProperties")))
-       (make-shape 'map #f 'object #f '() 
-                   (schema-shape document
-                                 (jso-ref resolved "additionalProperties")
-                                 #:registry registry)
-                   '() '() #f '() resolved
-                   (schema-nullable? document resolved)))
+            (let ((properties (jso-ref resolved "properties")))
+              (not (and (jso-object? properties) (pair? properties)))))
+       ;; An object that declares no members is a map, whatever its
+       ;; additionalProperties says.  Reading it as any other map keeps the data
+       ;; it carries: a bare `type: object` is how the specification says "any
+       ;; object", and turning it into a record with no fields would silently
+       ;; drop every member.
+       (let ((additional (jso-ref resolved "additionalProperties")))
+         (make-shape 'map #f 'object #f '()
+                     (if (jso-object? additional)
+                         (schema-shape document additional #:registry registry)
+                         (make-shape 'any #f #f #f '() #f '() '() #f '() '()
+                                     #f))
+                     '() '() #f '() resolved
+                     (schema-nullable? document resolved))))
       ((schema-object? document resolved)
        (make-shape 'object
                    (and registry (registry-name registry resolved))

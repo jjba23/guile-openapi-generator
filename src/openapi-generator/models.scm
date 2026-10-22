@@ -333,10 +333,14 @@ member."
   "Return the form that decodes @var{expression} as a union.
 
 A discriminated union dispatches on its discriminator property, which is exact;
-an undiscriminated one tries the branch tests in declaration order."
+an undiscriminated one tries the branch tests in declaration order.  A value that
+matches no branch is a validation failure with the union's path, the same kind of
+error a constructor raises, rather than a raw error a caller would have to know
+to catch."
   (let ((discriminator (shape-discriminator shape))
         (branches (shape-branches shape))
-        (values (shape-discriminator-values shape)))
+        (values (shape-discriminator-values shape))
+        (path (quoted (list (or (shape-name shape) "union")))))
     (if (and discriminator (pair? values))
         `(cond
           ,@(map (lambda (entry)
@@ -351,13 +355,18 @@ an undiscriminated one tries the branch tests in declaration order."
                          ;; than silently changing what a specification decodes to.
                          #f)))
                  values)
-          (else (error "no discriminator value in the value:" ,expression)))
+          (else (validation-failure ,path
+                                    ,(format #f
+                                             "no ~a discriminator value in the value: ~s"
+                                             discriminator
+                                             expression))))
         `(cond
           ,@(map (lambda (branch)
                    (list (union-branch-test ctx branch expression)
                          (unbox-expression ctx branch expression)))
                  branches)
-          (else (error "no union member matches" ,expression))))))
+          (else (validation-failure ,path
+                                    "no union member matches the value"))))))
 
 (define* (box-expression ctx shape expression #:optional (optional? #f))
   "Return the form that converts the Scheme @var{expression} into a jso value.
@@ -423,8 +432,7 @@ caller knows whether the field is required."
              (list `(check-list ,path
                                 ,expression
                                 ,(schema-predicate ctx (shape-items shape))
-                                ,(schema-display-name (shape-items shape)))))
-         (list `(check-unique-items ,path ,expression))))
+                                ,(schema-display-name (shape-items shape)))))))
        ((map)
         (append
          (list `(check-type ,path ,expression 'map))
@@ -443,7 +451,8 @@ caller knows whether the field is required."
         (list `(check-type ,path ,expression ',(schema-promoted-type shape)))))
      (string-constraints document shape path expression)
      (number-constraints document shape path expression)
-     (list-constraints document shape path expression))))
+     (list-constraints document shape path expression)
+     (map-constraints document shape path expression))))
 
 (define (string-constraints document shape path expression)
   (let ((schema (shape-schema shape)))
@@ -500,13 +509,38 @@ caller knows whether the field is required."
   (let ((schema (shape-schema shape)))
     (if (and schema (eq? (shape-kind shape) 'list))
         (let ((minimum (schema-min-items document schema))
-              (maximum (schema-max-items document schema)))
+              (maximum (schema-max-items document schema))
+              (unique? (schema-unique-items? document schema)))
           (append
            (if minimum
                (list `(check-min-items ,path ,expression ,minimum))
                '())
            (if maximum
                (list `(check-max-items ,path ,expression ,maximum))
+               '())
+           ;; Only a schema that asks for unique items is checked for them: an
+           ;; ordinary array is allowed to repeat a value.
+           (if unique?
+               (list `(check-unique-items ,path ,expression))
+               '())))
+        '())))
+
+(define (map-constraints document shape path expression)
+  "Return the forms that check the size of the map @var{shape}.
+
+@code{minProperties} and @code{maxProperties} describe a map just as
+@code{minItems} and @code{maxItems} describe a list; the runtime has carried the
+checks all along, and this is where a map finally asks for them."
+  (let ((schema (shape-schema shape)))
+    (if (and schema (eq? (shape-kind shape) 'map))
+        (let ((minimum (schema-min-properties document schema))
+              (maximum (schema-max-properties document schema)))
+          (append
+           (if minimum
+               (list `(check-min-properties ,path ,expression ,minimum))
+               '())
+           (if maximum
+               (list `(check-max-properties ,path ,expression ,maximum))
                '())))
         '())))
 
@@ -553,12 +587,19 @@ that passes a typo gets a reader error rather than a validation error."
 ;;; Records
 
 (define (record-extra-schema shape)
-  "Return the schema of undeclared members, when the object keeps them."
+  "Return the schema of undeclared members, when the object keeps them.
+
+The answer is the schema object when the specification declares one, @code{#t}
+when it says any member is allowed, and @code{#f} when extras are not kept.  A
+schema of only @code{additionalProperties} is a map rather than a record, so this
+is only consulted for objects that also declare properties."
   (let* ((schema (shape-schema shape))
          (additional (and schema (jso-ref schema "additionalProperties"))))
-    (and (jso-object? additional)
-         (pair? (shape-properties shape))
-         additional)))
+    (and (pair? (shape-properties shape))
+         (or (and (jso-object? additional)
+                  ;; An empty schema allows anything, just as `true` does.
+                  (if (pair? additional) additional #t))
+             (and (jso-true? additional) #t)))))
 
 (define (jso-literal value)
   "Return @var{value}, a jso value used as a default, as a form.
@@ -736,14 +777,16 @@ says null means for it."
                         value
                         ,(predicate-symbol symbol)
                         ,name)
-       ,(if (null? fields)
+       ,(if (and (null? fields) (not extra-schema))
             (list 'list)
+            ;; The undeclared members are spread into the object next to the
+            ;; declared ones, because that is where they came from.  Nesting them
+            ;; under one key would make encoding a record and decoding it back
+            ;; return a different object.
             `(append
               ,@members
               ,@(if extra-schema
-                    ;; The undeclared members are written last, under the name the
-                    ;; specification gave the extension point.
-                    (list (list 'list (list 'cons "additionalProperties" 'extra)))
+                    (list (list (accessor-symbol symbol 'extra) 'value))
                     '()))))))
 
 (define (record-decoder-form ctx symbol name fields field-names extra-schema)
@@ -772,7 +815,8 @@ absent value."
                   ,@arguments
                   ,@(if extra-schema
                         (list #:extra
-                              (extra-decode ctx extra-schema field-names))
+                              (extra-decode ctx extra-schema
+                                            (map property-name fields)))
                         '())))))))
 
 (define (record-patch-form symbol name)
@@ -821,13 +865,17 @@ for them."
   "Return the form that decodes the undeclared members of a jso object.
 
 The members the record already has fields for are skipped, so a value cannot be
-read into two places at once."
-  (let ((shape (schema-shape (context-document ctx)
-                             extra-schema
-                             #:registry (context-registry ctx))))
+read into two places at once.  When the specification says any additional member
+is allowed (@code{additionalProperties: true}), the values are kept as they are."
+  (let ((shape (and (not (eq? extra-schema #t))
+                    (schema-shape (context-document ctx)
+                                  extra-schema
+                                  #:registry (context-registry ctx)))))
     `(map (lambda (entry)
             (cons (car entry)
-                  ,(unbox-expression ctx shape '(cdr entry))))
+                  ,(if (eq? extra-schema #t)
+                       '(cdr entry)
+                       (unbox-expression ctx shape '(cdr entry)))))
           (filter (lambda (entry)
                     (not (member (car entry) ,(quoted known-fields))))
                   node))))
@@ -1173,7 +1221,12 @@ export list and the definitions agree on every name."
    (map (lambda (property)
           (accessor-symbol symbol
                            (string->symbol (identifier (property-name property)))))
-        (shape-properties shape))))
+        (shape-properties shape))
+   ;; A record that keeps undeclared members has an accessor for them too, and a
+   ;; caller that wants to read them back after decoding needs it exported.
+   (if (record-extra-schema shape)
+       (list (accessor-symbol symbol 'extra))
+       '())))
 
 (define (enumeration-exports symbol shape)
   "Return the symbols an enumeration exports."

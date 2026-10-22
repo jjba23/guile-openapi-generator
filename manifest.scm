@@ -38,7 +38,12 @@
 (define-public guile-veritas
   (package
     (name "guile-veritas")
-    (version "0.7.0")
+    ;; 0.8.0 is the first release whose `test' and `suite' are macros: they
+    ;; defer their bodies to run time.  With the old function-based API a test
+    ;; body was evaluated while the spec file was loaded, so any body that had
+    ;; to start something (the test HTTP server, for instance) ran before the
+    ;; runner was in charge and hung the whole suite.
+    (version "0.8.0")
     (source
      (origin
        (method git-fetch)
@@ -48,7 +53,7 @@
        (file-name (git-file-name name version))
        (sha256
         (base32
-         "11n9gyqb7nc0zw4z0fadmw4bd6k673314wpdd66mllwxs2xfcs0q"))))
+         "1cpc4cnm5aac8528s8b5wslcbxq0kdf7ya9y5rm6alv1h154pj47"))))
     (build-system guile-build-system)
     (arguments
      (list

@@ -39,7 +39,8 @@
             openapi-version
             supported-version?
             openapi-3?
-            document-title))
+            document-title
+            validate-document))
 
 (define supported-major-version "3")
 
@@ -90,32 +91,35 @@ character decides, because every JSON document starts with @code{@{} or
        'yaml)
       (else 'yaml))))
 
-(define* (read-spec-string text #:key (format #f) (source "<string>"))
+(define* (read-spec-string text #:key (format #f) (source "<string>") (validate? #t))
   "Parse @var{text} as an OpenAPI 3.x specification.
 
 @var{format} is @code{'json}, @code{'yaml} or #f to detect it.  @var{source}
-only labels error messages.  The value returned is the document itself, as
-described in @code{(openapi-generator jso)}."
+only labels error messages.  Unless @var{validate?} is @code{#f}, the document is
+checked to be OpenAPI 3.x before it is returned.  The value returned is the
+document itself, as described in @code{(openapi-generator jso)}."
   (let* ((format (or format (detect-format text)))
          (document (case format
                      ((json) (json-string->jso text))
                      ((yaml) (yaml-string->scm text))
                      (else (error "Unknown specification format" format)))))
-    (validate-document document source)
+    (when validate?
+      (validate-document document source))
     document))
 
-(define* (read-spec-file path #:key (format #f))
+(define* (read-spec-file path #:key (format #f) (validate? #t))
   "Read and parse the OpenAPI 3.x specification stored in @var{path}."
   (read-spec-string (call-with-input-file path get-string-all)
                     #:format (or format (detect-format path))
-                    #:source path))
+                    #:source path
+                    #:validate? validate?))
 
-(define* (read-spec source #:key (format #f))
+(define* (read-spec source #:key (format #f) (validate? #t))
   "Read a specification from @var{source}: a file name when that file exists,
 otherwise the document itself."
   (if (file-exists? source)
-      (read-spec-file source #:format format)
-      (read-spec-string source #:format format)))
+      (read-spec-file source #:format format #:validate? validate?)
+      (read-spec-string source #:format format #:validate? validate?)))
 
 ;;; Commentary:
 ;;; Validation

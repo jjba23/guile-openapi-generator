@@ -123,7 +123,7 @@ guile -L ./src -c '(use-modules (openapi-generator))'
 | guile-json    | 4.x     | JSON reading and writing, in the generator and at run time |
 | guile-curl    | 0.9     | generated libcurl clients only                           |
 | Artanis       | 1.x     | generated Artanis adapters only                          |
-| Veritas       | 0.7+    | this project's tests only                                |
+| Veritas       | 0.8+    | this project's tests only                                |
 | maak          | any     | the developer tasks (=maak test=, =maak check=, …)        |
 
 * Quick start
@@ -552,7 +552,7 @@ guix shell guile guile-json guile-curl guile-fibers -- \
 
 ** Tests
 
-Twelve Veritas suites, well over three hundred assertions, in three layers:
+Thirteen Veritas suites, well over three hundred assertions, in three layers:
 
 - *Reading*: the YAML reader (scalars, collections, block scalars, anchors,
   markers), the value representation and merge patch, format detection, and the
@@ -565,6 +565,12 @@ Twelve Veritas suites, well over three hundred assertions, in three layers:
   check that a constructor validates, that a union picks the right record, that a
   merge patch removes a member, and that the client really speaks HTTP to a server
   started by the test.
+
+  An *integration* suite closes the loop over a whole file rather than a fragment:
+  =test/fixtures/library.yaml= is read from start to finish, every module is
+  generated, the records are used to check that arrays, inexact multiples, bare
+  objects and extension members keep their data, the dispatcher is run against
+  the full route table, and the generated client calls a server for real.
 
 The generated trees are left in place, because a failing test should be
 inspectable; they are git-ignored.

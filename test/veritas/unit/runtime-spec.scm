@@ -130,7 +130,17 @@
                                                                           3))))
                (assert-true (invalid? (lambda () (check-maximum '("n") 4 3))))
                (assert-true (check-multiple-of '("n") 9 3))
-               (assert-true (invalid? (lambda () (check-multiple-of '("n") 7 3)))))
+               (assert-true (invalid? (lambda () (check-multiple-of '("n") 7 3))))
+
+               (assert-true (check-multiple-of '("n") 0.3 0.1)
+                            #:name "an inexact multiple is accepted within tolerance")
+               (assert-true (check-multiple-of '("n") 4.0 0.1)
+                            #:name "a whole inexact multiple is accepted")
+               (assert-true (invalid? (lambda ()
+                                        (check-multiple-of '("n") 0.35 0.1)))
+                            #:name "an inexact non-multiple is still rejected")
+               (assert-true (check-multiple-of '("n") 1/2 1/6)
+                            #:name "an exact rational multiple is accepted"))
 
          (test "Collections"
                (assert-true (check-min-items '("l") '(1 2) 2))
@@ -209,7 +219,21 @@
                (assert-error (lambda ()
                                (expect-status (error-response 500 "boom")
                                               '(200)))
-                             #:name "500 is not 200"))))
+                             #:name "500 is not 200"))
+
+         (test "A status family stands for every code in it"
+               (assert-equal #:expect '(200 201 202 299)
+                             #:got (list (car (status-range 200 202))
+                                         (cadr (status-range 200 202))
+                                         (caddr (status-range 200 202))
+                                         (car (reverse (status-range 200 299)))))
+               (assert-equal #:expect 200
+                             #:got (http-response-status
+                                    (expect-status (ok '()) (status-range 200 299))))
+               (assert-error (lambda ()
+                               (expect-status (error-response 500 "boom")
+                                              (status-range 200 299)))
+                             #:name "a 500 is outside the 2XX family"))))
 
 (define auth-suite
   (suite "Authentication"

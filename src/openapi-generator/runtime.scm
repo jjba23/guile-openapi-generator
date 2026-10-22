@@ -98,6 +98,7 @@
             no-content
             error-response
             expect-status
+            status-range
             unauthorized
             forbidden
             not-found
@@ -271,10 +272,25 @@ constraints the specification did not declare."
     (validation-failure path "must be less than ~a" maximum))
   #t)
 
+(define (multiple-of? value multiple)
+  "Return @code{#t} when @var{value} is an exact multiple of @var{multiple}.
+
+Exact numbers are divided exactly, so no tolerance is needed.  Inexact numbers
+are not: @code{(/ 0.3 0.1)} is @code{2.9999999999999996}, and a check that used
+@code{modulo} on that either raised a type error or rejected a value the
+specification allows.  The quotient is therefore rounded and compared within a
+tolerance proportional to its size."
+  (let ((ratio (/ value multiple)))
+    (if (and (exact? value) (exact? multiple))
+        (integer? ratio)
+        (let ((nearest (round ratio)))
+          (<= (abs (- ratio nearest))
+              (* 1e-9 (max 1 (abs nearest))))))))
+
 (define (check-multiple-of path value multiple)
   (when (and (number? value)
              (not (zero? multiple))
-             (not (zero? (modulo value multiple))))
+             (not (multiple-of? value multiple)))
     (validation-failure path "must be a multiple of ~a" multiple))
   #t)
 
@@ -417,6 +433,14 @@ to spell them: @code{(web client)} wants symbols and libcurl wants an
 (define (no-content)
   "Return a @code{204} response with no body."
   (make-http-response 204 '() json-null))
+
+(define (status-range first last)
+  "Return the status codes from @var{first} to @var{last}, inclusive.
+
+Generated clients use this for a response declared on a range such as
+@code{2XX}: the specification names a family of statuses, and a check that only
+listed one concrete code would either reject a success or accept a failure."
+  (iota (+ 1 (- last first)) first))
 
 (define (expect-status response expected)
   "Throw @code{openapi-http-error} unless @var{response} has one of @var{expected}.

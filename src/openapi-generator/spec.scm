@@ -508,32 +508,60 @@ satisfied together with its siblings."
 
 (define (operation-response-for-status operation status)
   "Return the response of @var{operation} declared for @var{status}."
-  (let ((responses (operation-responses operation)))
+  (let ((responses (operation-responses operation))
+        (wanted (response-status-text status)))
     (or (find (lambda (response)
-                (string=? (response-status response) status))
+                (string=? (response-status-text (response-status response))
+                          wanted))
               responses)
         (find (lambda (response)
-                (string=? (string-upcase (response-status response))
-                          (string-upcase status)))
+                (string-ci=? (response-status-text (response-status response))
+                             wanted))
               responses)
         (find (lambda (response)
-                (string=? (response-status response) "default"))
+                (string-ci=? (response-status-text (response-status response))
+                             "default"))
               responses))))
+
+(define (response-status-text status)
+  "Return @var{status}, which a reader may hand over as a string or a number, as text."
+  (cond ((string? status) status)
+        ((number? status) (number->string status))
+        (else "")))
+
+(define (response-success-code? status)
+  "Return @code{#t} when @var{status} names a success response.
+
+An exact code in the 2xx range counts, and so does a family such as @code{2XX}.
+@code{default} does not: it is a fallback for whatever was not declared, and
+preferring it over a declared success would decode an error as a success."
+  (let ((text (response-status-text status)))
+    (and (= (string-length text) 3)
+         (char=? (string-ref text 0) #\2)
+         (every (lambda (character)
+                  (or (char-numeric? character)
+                      (char=? (char-upcase character) #\X)))
+                (string->list text)))))
 
 (define (operation-success-response operation)
   "Return the success response of @var{operation}, or #f when it has none.
 
-The first of @code{200}, @code{201}, @code{202}, @code{204} wins; a response
-declared on a @code{2XX} range is accepted as a fallback."
-  (or (find identity
-            (map (lambda (status)
-                   (operation-response-for-status operation status))
-                 '("200" "201" "202" "204" "203" "205" "206")))
-      (find (lambda (response)
-              (let ((status (string-upcase (response-status response))))
-                (and (= (string-length status) 3)
-                     (char=? (string-ref status 0) #\2))))
-            (operation-responses operation))))
+An exact code among @code{200}, @code{201}, @code{202}, @code{204},
+@code{203}, @code{205} and @code{206} wins, then any other 2xx code or a
+@code{2XX} family, and only then @code{default}."
+  (let ((responses (operation-responses operation)))
+    (or (find (lambda (response)
+                (member (response-status-text (response-status response))
+                        '("200" "201" "202" "204" "203" "205" "206")
+                        string=?))
+              responses)
+        (find (lambda (response)
+                (response-success-code? (response-status response)))
+              responses)
+        (find (lambda (response)
+                (string-ci=? (response-status-text (response-status response))
+                             "default"))
+              responses))))
 
 (define (operation-request-media-type operation)
   "Return the preferred media type of the request body of @var{operation}."

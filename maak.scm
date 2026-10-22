@@ -73,10 +73,14 @@
 
 The trees the test suite generates under test/generated and the fixture programs
 in test/fixtures/programs are skipped: they are output or fragments, and they
-only make sense with a generated tree on the load path."
+only make sense with a generated tree on the load path.
+
+The load path is exported for the whole pipeline, not just for `find`: an
+assignment in front of a pipeline applies to that one command, so `guild compile`
+would otherwise run without src/ and test/ on its path."
   (time-machine-manifest-shell
    (list (string-append
-          "GUILE_LOAD_PATH=./src:./test:$GUILE_LOAD_PATH "
+          "export GUILE_LOAD_PATH=./src:./test:$GUILE_LOAD_PATH; "
           "find src test -name '*.scm' "
           "-not -path 'test/generated/*' "
           "-not -path 'test/fixtures/programs/*' -print0 "

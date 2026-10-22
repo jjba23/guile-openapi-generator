@@ -245,12 +245,45 @@ table."
               (list (cons "name" (security-scheme-parameter-name scheme)))
               '())))
 
+(define (response-status-text status)
+  "Return @var{status}, which a reader may hand over as a string or a number, as text."
+  (cond ((string? status) status)
+        ((number? status) (number->string status))
+        (else "")))
+
+(define (status-window text)
+  "Return @code{(first . last)} when @var{text} is a status family such as
+@code{2XX}, otherwise @code{#f}."
+  (and (= (string-length text) 3)
+       (char-numeric? (string-ref text 0))
+       (every (lambda (character)
+                (char=? (char-upcase character) #\X))
+              (list (string-ref text 1) (string-ref text 2)))
+       (let ((hundreds (- (char->integer (string-ref text 0))
+                          (char->integer #\0))))
+         (cons (* hundreds 100) (+ (* hundreds 100) 99)))))
+
 (define (operation-statuses operation)
-  "Return the success statuses declared by @var{operation}, as numbers."
+  "Return the form that checks the success statuses of @var{operation}.
+
+The result is a form for the generated client, not a value: a single declared
+code is a quoted list, a family such as @code{2XX} is a call to
+@code{status-range}, and @code{default} -- or no success response at all -- is
+@code{#f}, which @code{expect-status} reads as \"accept any\"."
   (let ((response (operation-success-response operation)))
-    (if (and response (string->number (response-status response)))
-        (list (string->number (response-status response)))
-        '())))
+    (if (not response)
+        #f
+        (let ((text (response-status-text (response-status response))))
+          (cond
+            ((string->number text)
+             (quoted (list (string->number text))))
+            ((string-ci=? text "default") #f)
+            ((status-window text)
+             (let ((window (status-window text)))
+               `(status-range ,(car window) ,(cdr window))))
+            ;; A status that cannot be understood must not turn into a check that
+            ;; accepts everything.
+            (else (quoted '())))))))
 
 (define (response-shape ctx operation)
   "Return the shape of the body of the success response of @var{operation}."
@@ -300,6 +333,20 @@ the generated procedure reads like the signature it is."
                     (list (list 'body #f))))
             (list '(auth (api-client-auth client))))))
 
+(define (header-argument-form parameter)
+  "Return the form that adds @var{parameter} to the request headers.
+
+A required parameter is always added; an optional one that the caller did not
+set is left out, because a header whose value is @code{#f} is not a header at
+all and the HTTP client rightly rejects it."
+  (let ((name (parameter-name parameter))
+        (field (parameter-field parameter)))
+    (if (parameter-required? parameter)
+        `(list (cons ,name ,field))
+        `(if (eq? ,field #f)
+             '()
+             (list (cons ,name ,field))))))
+
 (define (send-arguments ctx operation)
   "Return the keyword arguments of the @code{client-send} call of @var{operation}.
 
@@ -310,9 +357,7 @@ so credentials and caller arguments never overwrite one another by accident."
                               ,(parameter-field parameter)))
                      (parameters-by-location (operation-parameters operation)
                                              'query)))
-         (headers (map (lambda (parameter)
-                         `(cons ,(parameter-name parameter)
-                                ,(parameter-field parameter)))
+         (headers (map header-argument-form
                        (append (parameters-by-location
                                 (operation-parameters operation)
                                 'header)
@@ -326,7 +371,7 @@ so credentials and caller arguments never overwrite one another by accident."
                               `(append (list ,@query) auth-query))
                   #:headers (if (null? headers)
                                 'auth-headers
-                                `(append auth-headers (list ,@headers))))
+                                `(append auth-headers ,@headers)))
             (if body
                 (list #:body (box-expression ctx body 'body #f))
                 '()))))
@@ -399,7 +444,6 @@ the response is then checked against the statuses the specification declares and
 decoded as the record or collection it is."
   (let* ((name (operation-name operation))
          (shape (response-shape ctx operation))
-         (statuses (operation-statuses operation))
          (security (operation-security operation))
          (decode (if shape
                      (unbox-expression ctx shape '(http-response-body response))
@@ -415,9 +459,7 @@ decoded as the record or collection it is."
                                               path
                                               ,@(send-arguments ctx operation))))
                    (expect-status response
-                                  ,(if (null? statuses)
-                                       #f
-                                       (quoted statuses)))
+                                  ,(operation-statuses operation))
                    (values ,decode response))))))))
 
 ;;; Commentary:

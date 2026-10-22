@@ -193,9 +193,15 @@ Returns an alist of component to the path that was written:
 ;;     (controllers . \"gen/petstore/controllers.scm\")
 ;;     (client . \"gen/petstore/client.scm\"))
 @end example"
-  (let* ((spec (parse-spec (or document
-                               (read-spec input)
-                               (error "No specification given: pass #:input or #:document"))
+  (let* ((parsed (or document
+                     (read-spec input #:validate? validate?)
+                     (error "No specification given: pass #:input or #:document")))
+         (_ (when (and validate? document)
+              ;; A file is validated by read-spec; a document handed over already
+              ;; parsed has to be checked here, so that `#:validate?` means the
+              ;; same thing whichever way the specification arrived.
+              (validate-document parsed (or source-name input "<document>"))))
+         (spec (parse-spec parsed
                            #:source (or source-name input "<document>")))
          (root (root-module-name spec module))
          (root-module (list (string->symbol root)))
@@ -256,8 +262,11 @@ Returns an alist of component to the path that was written:
   (apply generate #:input path options))
 
 (define* (generate-from-string text #:rest options)
-  "Generate code from the specification in @var{text}."
-  (apply generate #:document (read-spec-string text) options))
+  "Generate code from the specification in @var{text}.
+
+The text is parsed here but validated by @code{generate}, so a caller that passes
+@code{#:validate? #f} really skips the check."
+  (apply generate #:document (read-spec-string text #:validate? #f) options))
 
 ;;; Commentary:
 ;;; The README of a generated tree

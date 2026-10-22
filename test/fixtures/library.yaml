@@ -1,0 +1,224 @@
+# A complete, realistic specification used by the integration suite.
+#
+# It is deliberately a *whole* document rather than a fragment: the integration
+# tests read this file, generate every module the generator can write, load the
+# result in a fresh process and use it the way an application would.  The parts
+# chosen are the ones where a generator bug shows up as lost or reshaped data:
+# arrays with and without uniqueItems, an inexact multipleOf, an object that is
+# only additionalProperties, a bare `type: object`, a record that keeps
+# undeclared members, and a success response declared on a 2XX family.
+
+openapi: 3.0.3
+info:
+  title: Library
+  version: 1.5.0
+  description: >
+    A small library catalogue.  Books can be listed, created, fetched, deleted
+    and searched; the schemas exercise the parts of JSON Schema that a code
+    generator has to preserve rather than approximate.
+servers:
+  - url: https://library.example.com/v1
+    description: Production
+  - url: http://localhost:8080
+    description: Tinkering
+security:
+  - api_key: []
+paths:
+  /books:
+    get:
+      operationId: listBooks
+      summary: List the catalogue
+      tags: [books]
+      parameters:
+        - name: limit
+          in: query
+          description: How many books to return
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: x-request-id
+          in: header
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The books
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Book'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: createBook
+      summary: Add a book
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewBook'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Book'
+        default:
+          $ref: '#/components/responses/Error'
+  /books/{bookId}:
+    parameters:
+      - name: bookId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getBook
+      summary: One book
+      responses:
+        '200':
+          description: The book
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Book'
+        '404':
+          description: No such book
+    delete:
+      operationId: deleteBook
+      security: []
+      responses:
+        '204':
+          description: Deleted
+  /search:
+    get:
+      operationId: searchBooks
+      summary: Search the catalogue
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+      responses:
+        '2XX':
+          description: The matching books
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Book'
+        default:
+          $ref: '#/components/responses/Error'
+components:
+  responses:
+    Error:
+      description: Something went wrong
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  securitySchemes:
+    api_key:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  schemas:
+    Book:
+      type: object
+      required: [id, title, price]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        price:
+          type: number
+          multipleOf: 0.01
+          minimum: 0
+        tags:
+          # No uniqueItems here on purpose: an ordinary array may repeat a value.
+          type: array
+          items:
+            type: string
+        ratings:
+          type: array
+          items:
+            type: number
+            minimum: 0
+            maximum: 5
+          uniqueItems: true
+        metadata:
+          # A bare `type: object`: any object at all.  Reading it as a record
+          # with no fields would silently drop everything it carries.
+          type: object
+        counters:
+          # A map with a size the specification constrains.
+          type: object
+          additionalProperties:
+            type: integer
+          minProperties: 1
+          maxProperties: 2
+        annotations:
+          $ref: '#/components/schemas/Annotations'
+        status:
+          type: string
+          enum: [draft, published, archived]
+        publishedOn:
+          type: string
+          format: date
+          nullable: true
+    NewBook:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+        price:
+          type: number
+          multipleOf: 0.01
+    Annotations:
+      # Declared members *and* an extension point: both have to survive a round
+      # trip, next to each other and not nested under a made-up key.
+      type: object
+      properties:
+        source:
+          type: string
+      additionalProperties:
+        type: string
+    Draft:
+      # The same idea, spelled with a boolean: any undeclared member is allowed.
+      type: object
+      properties:
+        title:
+          type: string
+      additionalProperties: true
+    FreeForm:
+      type: object
+    Labels:
+      type: object
+      additionalProperties:
+        type: string
+    Problem:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: integer
+        message:
+          type: string

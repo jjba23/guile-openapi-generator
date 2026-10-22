@@ -176,7 +176,7 @@
                                                         "models-patch"))))
 
          (test "A discriminated union decodes into the right record"
-               (assert-equal #:expect '("#t" "Mia" "#t" "#t" "#t" "#f")
+               (assert-equal #:expect '("#t" "Mia" "#t" "#t" "#t" "#f" "(Animal)")
                              #:got (lines (check-models 'e2e-models-union
                                                         "models-union"))))
 
