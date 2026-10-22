@@ -107,11 +107,15 @@
             make-multipart-boundary
             multipart-part
             multipart-body
+            multipart-boundary
+            parse-multipart-body
             unauthorized
             forbidden
             not-found
             uri-encode
             query-string
+            form-string
+            coerce-form-values
             parse-query
             header-ref
             header-set
@@ -465,35 +469,6 @@ contract violation, not a value the caller can use."
   "Return one multipart part: @var{name}, @var{value} and an optional filename."
   (list name value filename))
 
-(define (multipart-value-text value)
-  "Return @var{value} as the text of a multipart part."
-  (cond
-    ((string? value) value)
-    ((bytevector? value) (bytevector->string value "ISO-8859-1"))
-    ((json-null? value) "")
-    (else (format #f "~a" value))))
-
-(define* (multipart-body parts #:key boundary)
-  "Return @var{parts}, a list of @code{multipart-part} values, as a request body."
-  (let ((boundary (or boundary (make-multipart-boundary))))
-    (string-append
-     (apply string-append
-            (map (lambda (part)
-                   (let ((name (car part))
-                         (value (cadr part))
-                         (filename (caddr part)))
-                     (string-append
-                      "--" boundary "\r\n"
-                      "Content-Disposition: form-data; name=\"" name "\""
-                      (if filename
-                          (format #f "; filename=\"~a\"" filename)
-                          "")
-                      "\r\n\r\n"
-                      (multipart-value-text value)
-                      "\r\n")))
-                 parts))
-     "--" boundary "--\r\n")))
-
 (define (ok value)
   "Return a @code{200} response carrying @var{value}."
   (json-response 200 value))
@@ -560,28 +535,229 @@ listed one concrete code would either reject a success or accept a failure."
                                      (char->integer character))))
                        text))))
 
+(define (query-value-string value)
+  "Return VALUE as it appears in a query string.
+
+Booleans are spelled the way a URL spells them, not the way Scheme prints them:
+@code{#t} is @code{true}, and the caller omits @code{#f} entirely."
+  (cond
+    ((eq? value #t) "true")
+    ((eq? value #f) #f)
+    ((number? value) (number->string value))
+    ((string? value) value)
+    (else (format #f "~a" value))))
+
 (define (query-string parameters)
   "Render the alist @var{parameters} as a query string, without the @code{?}."
-  (string-join (append-map (lambda (entry)
-                             (let ((name (car entry))
-                                   (value (cdr entry)))
-                               (cond
-                                 ((eq? value #f) '())
-                                 ((json-null? value) '())
-                                 ((list? value)
-                                  (map (lambda (element)
-                                         (format #f "~a=~a"
-                                                 (uri-encode name)
-                                                 (uri-encode (format #f "~a"
-                                                                     element))))
-                                       value))
-                                 (else
-                                  (list (format #f "~a=~a"
-                                                (uri-encode name)
-                                                (uri-encode (format #f "~a"
-                                                                    value))))))))
-                           parameters)
-               "&"))
+  (string-join
+   (append-map (lambda (entry)
+                 (let ((name (car entry))
+                       (value (cdr entry)))
+                   (cond
+                     ((eq? value #f) '())
+                     ((json-null? value) '())
+                     ((list? value)
+                      (filter-map (lambda (element)
+                                    (let ((text (query-value-string element)))
+                                      (and text
+                                           (format #f "~a=~a"
+                                                   (uri-encode name)
+                                                   (uri-encode text)))))
+                                  value))
+                     (else
+                      (let ((text (query-value-string value)))
+                        (if text
+                            (list (format #f "~a=~a"
+                                          (uri-encode name)
+                                          (uri-encode text)))
+                            '()))))))
+               parameters)
+   "&"))
+
+(define (form-value-string value)
+  "Return VALUE the way an application/x-www-form-urlencoded body spells it.
+
+Unlike a query string, a form field is not omitted when it is false: a form
+that declares a boolean sends @code{false}, so the server can tell the field
+was there."
+  (cond
+    ((eq? value #t) "true")
+    ((eq? value #f) "false")
+    ((number? value) (number->string value))
+    ((string? value) value)
+    (else (format #f "~a" value))))
+
+(define (form-string parameters)
+  "Render @var{parameters} as an application/x-www-form-urlencoded body."
+  (string-join
+   (append-map (lambda (entry)
+                 (let ((name (car entry))
+                       (value (cdr entry)))
+                   (cond
+                     ((json-null? value) '())
+                     ((list? value)
+                      (map (lambda (element)
+                             (format #f "~a=~a"
+                                     (uri-encode name)
+                                     (uri-encode (form-value-string element))))
+                           value))
+                     (else
+                      (list (format #f "~a=~a"
+                                    (uri-encode name)
+                                    (uri-encode (form-value-string value))))))))
+               parameters)
+   "&"))
+
+(define (form-boolean value)
+  "Return @var{value}, a form string, as a boolean when it spells one."
+  (let ((text (string-downcase (format #f "~a" value))))
+    (cond
+      ((member text '("true" "1" "yes" "on")) #t)
+      ((member text '("false" "0" "no" "off" "")) #f)
+      (else value))))
+
+(define (coerce-form-values values types)
+  "Return @var{values}, a form alist, with each value coerced to its type.
+
+@var{types} is an alist of field name to @code{integer}, @code{number},
+@code{boolean} or @code{string}.  A value that does not parse is left as the
+string it was, so validation reports the field rather than a coercion helper
+silently inventing a value."
+  (map (lambda (entry)
+         (let* ((name (car entry))
+                (type-entry (or (assoc name types)
+                                (and (string? name)
+                                     (assoc (string->symbol name) types)))))
+           (cons (car entry)
+                 (if (not type-entry)
+                     (cdr entry)
+                     (case (cdr type-entry)
+                       ((integer number)
+                        (let ((number (and (string? (cdr entry))
+                                           (string->number (cdr entry)))))
+                          (or number (cdr entry))))
+                       ((boolean) (form-boolean (cdr entry)))
+                       (else (cdr entry)))))))
+       values))
+
+(define (multipart-boundary content-type)
+  "Return the boundary named by @var{content-type}, or @code{#f}."
+  (let* ((text (if (string? content-type)
+                   content-type
+                   (format #f "~a" (or content-type ""))))
+         (lowered (string-downcase text))
+         (index (string-contains lowered "boundary=")))
+    (and index
+         (let* ((start (+ index (string-length "boundary=")))
+                (rest (substring text start (string-length text)))
+                (value (car (string-split rest #\;)))
+                (trimmed (string-trim-both value)))
+           (if (and (> (string-length trimmed) 1)
+                    (char=? (string-ref trimmed 0) #\")
+                    (char=? (string-ref trimmed
+                                        (- (string-length trimmed) 1))
+                            #\"))
+               (substring trimmed 1 (- (string-length trimmed) 1))
+               trimmed)))))
+
+(define (split-on text delimiter)
+  "Split @var{text} on every occurrence of the string @var{delimiter}."
+  (let loop ((start 0) (out '()))
+    (let ((index (string-contains text delimiter start)))
+      (if index
+          (loop (+ index (string-length delimiter))
+                (cons (substring text start index) out))
+          (reverse (cons (substring text start (string-length text)) out))))))
+
+(define (multipart-part-name headers)
+  "Return the form field name declared in @var{headers}, or @code{#f}."
+  (let* ((lowered (string-downcase headers))
+         (index (string-contains lowered "name=\"")))
+    (and index
+         (let* ((start (+ index (string-length "name=\"")))
+                (end (string-index headers #\" start)))
+           (and end (substring headers start end))))))
+
+(define (strip-crlf text)
+  "Return @var{text} without one trailing CRLF."
+  (if (and (>= (string-length text) 2)
+           (char=? (string-ref text (- (string-length text) 2)) #\return)
+           (char=? (string-ref text (- (string-length text) 1)) #\newline))
+      (substring text 0 (- (string-length text) 2))
+      text))
+
+(define (parse-multipart-body body content-type)
+  "Parse a multipart/form-data @var{body} into an alist of fields.
+
+The values are strings; a file part is returned as its content, because the
+generated model describes the part's shape and not the browser's filename.  A
+body without a boundary, or one that is not text, yields the empty alist."
+  (let* ((text (cond
+                 ((string? body) body)
+                 ((bytevector? body) (bytevector->string body "ISO-8859-1"))
+                 (else "")))
+         (boundary (multipart-boundary content-type))
+         (parts (and boundary
+                     (cdr (split-on text (string-append "--" boundary))))))
+    (if (not parts)
+        '()
+        (filter-map
+         (lambda (part)
+           (let* ((part (if (string-prefix? "\r\n" part)
+                            (substring part 2 (string-length part))
+                            part))
+                  (separator (string-contains part "\r\n\r\n")))
+             (and separator
+                  (let* ((headers (substring part 0 separator))
+                         (value (strip-crlf
+                                 (substring part (+ separator 4)
+                                            (string-length part))))
+                         (name (multipart-part-name headers)))
+                    (and name (cons name value))))))
+         (filter (lambda (part)
+                   (and (not (string-null? part))
+                        (not (string-prefix? "--" part))))
+                 parts)))))
+
+(define (bytevector-concat parts)
+  "Return the concatenation of the bytevectors @var{parts}."
+  (let* ((size (apply + (map bytevector-length parts)))
+         (out (make-bytevector size 0)))
+    (let loop ((rest parts) (offset 0))
+      (if (null? rest)
+          out
+          (let ((part (car rest)))
+            (bytevector-copy! part 0 out offset (bytevector-length part))
+            (loop (cdr rest) (+ offset (bytevector-length part))))))))
+
+(define (multipart-part-bytes part boundary)
+  "Return one multipart part as a list of bytevectors."
+  (let ((name (car part))
+        (value (cadr part))
+        (filename (caddr part)))
+    (list (string->utf8
+           (string-append
+            "--" boundary "\r\n"
+            "Content-Disposition: form-data; name=\"" name "\""
+            (if filename
+                (format #f "; filename=\"~a\"" filename)
+                "")
+            "\r\n\r\n"))
+          (cond
+            ((bytevector? value) value)
+            ((string? value) (string->utf8 value))
+            (else (string->utf8 (format #f "~a" value))))
+          (string->utf8 "\r\n"))))
+
+(define* (multipart-body parts #:key boundary)
+  "Return @var{parts}, a list of @code{multipart-part} values, as request bytes."
+  (let* ((boundary (or boundary (make-multipart-boundary)))
+         (chunks (append-map (lambda (part)
+                               (multipart-part-bytes part boundary))
+                             parts)))
+    (bytevector-concat
+     (append chunks
+             (list (string->utf8 (string-append "--" boundary "--\r\n")))))))
 
 (define (parse-query text)
   "Parse the query string @var{text} into an alist of decoded name/value pairs."

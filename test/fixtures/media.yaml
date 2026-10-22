@@ -72,6 +72,10 @@ paths:
                   type: string
                 note:
                   type: string
+                count:
+                  type: integer
+                subscribe:
+                  type: boolean
       responses:
         '200':
           description: Stored
@@ -102,6 +106,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FormResult'
+  /form-response:
+    get:
+      operationId: getFormResponse
+      responses:
+        '200':
+          description: A form
+          content:
+            application/x-www-form-urlencoded:
+              schema:
+                $ref: '#/components/schemas/FormResult'
   /headers:
     get:
       operationId: getHeaders
@@ -119,6 +133,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FormResult'
+  /negotiated:
+    get:
+      operationId: getNegotiated
+      parameters:
+        - name: representation
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Either representation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FormResult'
+            text/plain:
+              schema:
+                type: string
+  /accept:
+    post:
+      operationId: acceptBody
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FormResult'
+          text/plain:
+            schema:
+              type: string
+      responses:
+        '200':
+          description: Echo
+          content:
+            text/plain:
+              schema:
+                type: string
   /empty:
     get:
       operationId: getEmpty

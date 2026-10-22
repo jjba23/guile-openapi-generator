@@ -198,6 +198,26 @@
                  (assert-equal #:expect "application/json"
                                #:got (http-request-header request "accept"))))
 
+         (test "Form bodies spell numbers and booleans and coerce them back"
+               (assert-equal
+                #:expect "a=1&b=false&c=x%20y&d=true"
+                #:got (form-string '(("a" . 1) ("b" . #f)
+                                     ("c" . "x y") ("d" . #t))))
+               (assert-equal
+                #:expect '(("a" . "1") ("count" . 3) ("subscribe" . #t))
+                #:got (coerce-form-values
+                       (parse-query "a=1&count=3&subscribe=true")
+                       '(("a" . string) ("count" . integer)
+                         ("subscribe" . boolean))))
+               (assert-equal
+                #:expect '(("count" . "many"))
+                #:got (coerce-form-values '(("count" . "many"))
+                                          '(("count" . integer))))
+               (assert-equal
+                #:expect '(("subscribe" . #f))
+                #:got (coerce-form-values '(("subscribe" . "false"))
+                                          '(("subscribe" . boolean)))))
+
          (test "Query strings encode and decode"
                (assert-equal #:expect "a=1&c=x%20y"
                              #:got (query-string '(("a" . 1) ("b" . #f)

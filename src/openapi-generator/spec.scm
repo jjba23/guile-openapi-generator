@@ -121,6 +121,8 @@
             operation-response-media-type
             media-type-json?
             media-type-kind
+            media-type-preference
+            ordered-media-types
             parameters-by-location
             security-schemes-by-name))
 
@@ -619,18 +621,39 @@ An exact code among @code{200}, @code{201}, @code{202}, @code{204},
       ((string=? name "multipart/form-data") 'multipart)
       (else 'binary))))
 
+(define (media-type-preference media-type)
+  "Return the rank of @var{media-type} when several are declared.
+
+JSON is the most useful default for a generated client, then plain text, then a
+form, then multipart; anything else is binary and comes last.  Declaration order
+breaks ties, because a specification author who lists a custom type first still
+means it."
+  (case (media-type-kind media-type)
+    ((json) 0)
+    ((text) 1)
+    ((form) 2)
+    ((multipart) 3)
+    (else 4)))
+
+(define (ordered-media-types media-types)
+  "Return @var{media-types} in preference order, keeping declaration order per rank."
+  (stable-sort media-types
+               (lambda (first second)
+                 (< (media-type-preference first)
+                    (media-type-preference second)))))
+
 (define (operation-request-media-type operation)
   "Return the preferred media type of the request body of @var{operation}."
   (let ((body (operation-request-body operation)))
     (and body
-         (let ((media-types (request-body-media-types body)))
-           (or (find media-type-json? media-types)
-               (and (pair? media-types) (car media-types)))))))
+         (let ((media-types (ordered-media-types
+                             (request-body-media-types body))))
+           (and (pair? media-types) (car media-types))))))
 
 (define (operation-response-media-type operation)
   "Return the preferred media type of the success response of @var{operation}."
   (let ((response (operation-success-response operation)))
     (and response
-         (let ((media-types (response-media-types response)))
-           (or (find media-type-json? media-types)
-               (and (pair? media-types) (car media-types)))))))
+         (let ((media-types (ordered-media-types
+                             (response-media-types response))))
+           (and (pair? media-types) (car media-types))))))

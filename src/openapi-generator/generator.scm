@@ -433,6 +433,8 @@ The text is parsed here but validated by @code{generate}, so a caller that passe
                        (list suffix)))
          (operations (spec-operations spec))
          (schemas (spec-schemas spec))
+         (first-operation (and (pair? operations)
+                               (operation-name (car operations))))
          (files (map car written)))
     (string-append
      (format #f "#+title: ~a~%#+options: toc:nil~%~%" (spec-title spec))
@@ -495,13 +497,77 @@ The text is parsed here but validated by @code{generate}, so a caller that passe
                                           (car suffixes))))
          "")
      (if (member 'client files)
-         (format #f "(use-modules (~a client) (~a runtime))~%~%(define client (make-api-client))~%"
-                 root root)
+         (format #f "(use-modules (~a client) (~{~a~^ ~}))~%~%(define client (make-api-client))~%"
+                 root
+                 (config-runtime-module config))
          "")
      (if (member 'controllers files)
          (format #f "~%(use-modules (~a controllers))~%" root)
          "")
      "#+end_src\n"
+     (if (member 'controllers files)
+         (if (member 'artanis files)
+             (format #f
+                     (string-append
+                      "\n* Serving the API\n\n"
+                      "The Artanis adapter registers every route of this tree on the\n"
+                      "current Artanis application:\n\n"
+                      "#+begin_src scheme\n"
+                      "(use-modules (~a controllers artanis))\n"
+                      "(register-routes!)\n"
+                      "#+end_src\n")
+                     root)
+             (format #f
+                     (string-append
+                      "\n* Serving the API\n\n"
+                      "The controllers module exports =guile-handler=, an adapter for\n"
+                      "Guile's own =run-server=.  Install one handler per operation and\n"
+                      "start the server:\n\n"
+                      "#+begin_src scheme\n"
+                      "(use-modules (web server)\n"
+                      "             (~a controllers)\n"
+                      "             (~{~a~^ ~}))\n\n"
+                      "(parameterize ((api-handlers\n"
+                      "                (list (cons '~a\n"
+                      "                            (lambda (request arguments)\n"
+                      "                              (ok '#()))))))\n"
+                      "  (run-server (guile-handler) 'http '(#:port 8080)))\n"
+                      "#+end_src\n\n"
+                      "The handler receives the decoded arguments and returns a\n"
+                      "response built with =ok=, =created=, =text-response=,\n"
+                      "=binary-response= or =error-response=.  JSON bodies are serialised\n"
+                      "for you; convert a record with its =->jso= procedure first.\n")
+                     root
+                     (config-runtime-module config)
+                     (or first-operation 'operation)))
+         "")
+     (if (member 'client files)
+         (format #f
+                 (string-append
+                  "\n* Calling the API\n\n"
+                  "A client procedure returns two values: the decoded body and the\n"
+                  "<http-response>.\n\n"
+                  "#+begin_src scheme\n"
+                  "(use-modules (ice-9 receive)\n"
+                  "             (~a client))\n\n"
+                  "(define client (make-api-client))\n\n"
+                  "(receive (value response)\n"
+                  "    (~a client)\n"
+                  "  value)\n"
+                  "#+end_src\n\n"
+                  "Pass the keyword arguments the operation declares, for example\n"
+                  "=#:limit 10=.  =make-api-client= starts from the first server URL of\n"
+                  "the specification; pass =#:base-url= to point it elsewhere.\n")
+                 root
+                 (or first-operation 'operation))
+         "")
+     "\n* Packaging\n\n"
+     "- =--self-contained= copies the runtime modules next to the generated code,\n"
+     "  so the tree needs only Guile and guile-json at run time.\n"
+     "- =--dependencies guix= writes a =dependencies.scm= manifest for\n"
+     "  =guix shell -m=.\n"
+     "- By default the modules import =(openapi-generator runtime)=; keep this\n"
+     "  generator on the load path, or generate again with =--self-contained=.\n"
      (if (and (config-models? config)
               (not (eq? (config-http config) 'none)))
          (format #f

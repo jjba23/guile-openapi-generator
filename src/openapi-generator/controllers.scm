@@ -149,41 +149,119 @@ type of @var{parameter}."
   (let ((raw (format #f "(assoc-ref path-arguments ~s)" (parameter-name parameter))))
     (query-value-expression parameter raw)))
 
-(define (request-body-decoder operation ctx)
-  "Return the source that decodes the request body of @var{operation}.
+(define (form-field-types ctx shape)
+  "Return the source of a quoted alist of field name to scalar type.
 
-The media type decides whether the body is JSON, a form, plain text or bytes.
-A multipart body is left raw: parsing it needs the boundary and parts, and a
-handler that wants that should receive the bytes rather than a half-decoded
-value."
-  (let* ((media-type (operation-request-media-type operation))
-         (kind (and media-type (media-type-kind media-type)))
-         (schema (and media-type (media-type-schema media-type)))
-         (shape (and schema
-                     (schema-shape (context-document ctx)
-                                   schema
-                                   #:registry (context-request-registry ctx))))
+Only scalar and enumeration properties are coerced; a nested object or array is
+left as the string the form carried, because a flat form has no way to say more.
+The alist is passed to @code{coerce-form-values} in the generated code; its
+names are written with @code{~s}, because the renderer that inserts this source
+displays strings without their quotes."
+  (let* ((structure (and shape
+                         (schema-shape (context-document ctx)
+                                       (shape-schema shape)
+                                       #:registry (context-request-registry ctx)
+                                       #:named? #f)))
+         (types (if (and structure
+                         (memq (shape-kind structure) '(record object)))
+                    (filter-map
+                     (lambda (property)
+                       (let* ((property-shape (property-shape property))
+                              (type (cond
+                                      ((scalar-shape? property-shape)
+                                       (or (shape-type property-shape)
+                                           'string))
+                                      ((enum-shape? property-shape)
+                                       (or (shape-type property-shape)
+                                           'string))
+                                      (else #f))))
+                         (and type
+                              (cons (property-name property) type))))
+                     (shape-properties structure))
+                    '())))
+    (format #f "(quote (~{~a~^ ~}))"
+            (map (lambda (entry)
+                   (format #f "(~s . ~a)" (car entry) (cdr entry)))
+                 types))))
+
+(define (media-type-shape ctx media-type)
+  "Return the request shape of @var{media-type}, or @code{#f}."
+  (let ((schema (and media-type (media-type-schema media-type))))
+    (and schema
+         (schema-shape (context-document ctx)
+                       schema
+                       #:registry (context-request-registry ctx)))))
+
+(define (media-type-match-expression media-type variable)
+  "Return source that tests whether @var{variable} names @var{media-type}."
+  (case (media-type-kind media-type)
+    ((json) (format #f "(string-contains ~a \"json\")" variable))
+    ((text) (format #f "(string-contains ~a \"text/\")" variable))
+    (else (format #f "(string-contains ~a ~s)"
+                  variable
+                  (string-downcase (media-type-name media-type))))))
+
+(define (request-media-decode-expression ctx media-type)
+  "Return source that decodes a request body of @var{media-type}."
+  (let* ((shape (media-type-shape ctx media-type))
+         (kind (media-type-kind media-type))
+         (converter (and shape (converter-to shape)))
          (raw "(http-request-body request)"))
     (cond
       ((not shape) raw)
-      ((memq kind '(text binary))
-       (if (shape-name shape)
-           (format #f "(~a ~a)" (converter-to shape) raw)
-           raw))
       ((eq? kind 'form)
        (format #f
-               "(let ((raw ~a)) (if (string? raw) (~a (parse-query raw)) #f))"
-               raw
-               (converter-to shape)))
-      ((eq? kind 'multipart) raw)
+               "(let ((raw ~a)) (if (string? raw) (~a (coerce-form-values (parse-query raw) ~a)) #f))"
+               raw converter (form-field-types ctx shape)))
+      ((eq? kind 'multipart)
+       (format #f
+               "(let ((raw ~a)) (~a (coerce-form-values (parse-multipart-body raw (http-request-header request \"Content-Type\")) ~a)))"
+               raw converter (form-field-types ctx shape)))
+      ((memq kind '(text binary))
+       (if (shape-name shape)
+           (format #f "(~a ~a)" converter raw)
+           raw))
       (else
        (format #f
                (string-append
                 "(let ((raw (http-request-body request)))"
                 " (cond ((string? raw) (~a (json-string->jso raw)))"
                 " ((jso-object? raw) (~a raw)) (else #f)))")
-               (converter-to shape)
-               (converter-to shape))))))
+               converter
+               converter)))))
+
+(define (request-body-decoder operation ctx)
+  "Return the source that decodes the request body of @var{operation}.
+
+The actual Content-Type decides which declared media type is decoded, so a
+client that sends text to an operation that also accepts JSON is understood
+rather than fed to a JSON parser.  A body with no declared media type is passed
+through raw."
+  (let* ((body (operation-request-body operation))
+         (media-types (if body
+                          (ordered-media-types
+                           (request-body-media-types body))
+                          '())))
+    (cond
+      ((null? media-types) "(http-request-body request)")
+      ((null? (cdr media-types))
+       (request-media-decode-expression ctx (car media-types)))
+      (else
+       (format #f
+               (string-append
+                "(let ((content-type"
+                " (string-downcase (format #f \"~~a\""
+                " (or (http-request-header request \"Content-Type\") \"\")))))"
+                " (cond ~a (else ~a)))")
+               (string-join
+                (map (lambda (media-type)
+                       (format #f "(~a ~a)"
+                               (media-type-match-expression media-type
+                                                            'content-type)
+                               (request-media-decode-expression ctx media-type)))
+                     media-types)
+                " ")
+               (request-media-decode-expression ctx (car media-types)))))))
 
 (define (converter-to shape)
   (format #f "jso->~a" (identifier (or (shape-name shape) "value"))))
@@ -239,7 +317,11 @@ value."
                               (symbol->string (parameter-location parameter))))
                     parameters)))
    (if body
-       (format #f "~%~%The request body is decoded from JSON.")
+       (let ((media-type (operation-request-media-type operation)))
+         (format #f "~%~%The request body is decoded from ~a."
+                 (if media-type
+                     (media-type-name media-type)
+                     "the declared media type")))
        "")
    (format #f
            (string-append
@@ -351,6 +433,96 @@ value."
              #\newline)))
 
 ;;; Commentary:
+;;; Plain Guile web server
+
+;; The adapter between (web server) values and the runtime's request and response
+;; records.  It is generated only for the portable controllers: an Artanis app
+;; gets the adapter in the Artanis module instead.
+(define guile-support
+  (string-append
+   "(define (guile-header-value value)\n"
+   "  \"Return VALUE, a header parsed by (web http), as its text.\"\n"
+   "  (cond\n"
+   "    ((string? value) value)\n"
+   "    ((pair? value)\n"
+   "     (let ((parameters (cdr value)))\n"
+   "       (string-append\n"
+   "        (format #f \"~a\" (car value))\n"
+   "        (if (list? parameters)\n"
+   "            (apply string-append\n"
+   "                   (map (lambda (parameter)\n"
+   "                          (if (pair? parameter)\n"
+   "                              (format #f \"; ~a=~a\"\n"
+   "                                      (car parameter) (cdr parameter))\n"
+   "                              (format #f \"; ~a\" parameter)))\n"
+   "                        parameters))\n"
+   "            \"\"))))\n"
+   "    (else (format #f \"~a\" value))))\n"
+   "\n"
+   "(define (guile-request-body body content-type)\n"
+   "  \"Return BODY, as (web server) read it, in the shape the runtime expects.\"\n"
+   "  (if (and (bytevector? body)\n"
+   "           (or (string-contains content-type \"json\")\n"
+   "               (string-contains content-type \"text/\")\n"
+   "               (string-contains content-type\n"
+   "                                \"x-www-form-urlencoded\")))\n"
+   "      (utf8->string body)\n"
+   "      body))\n"
+   "\n"
+   "(define (guile-request request body)\n"
+   "  \"Return the <http-request> that corresponds to a (web request) REQUEST.\"\n"
+   "  (let* ((uri (request-uri request))\n"
+   "         (headers (map (lambda (entry)\n"
+   "                         (cons (format #f \"~a\" (car entry))\n"
+   "                               (guile-header-value (cdr entry))))\n"
+   "                       (request-headers request)))\n"
+   "         (content-type (or (header-ref headers \"Content-Type\") \"\")))\n"
+   "    (make-http-request\n"
+   "     (request-method request)\n"
+   "     (uri-path uri)\n"
+   "     (parse-query (uri-query uri))\n"
+   "     headers\n"
+   "     (guile-request-body body content-type))))\n"
+   "\n"
+   "(define (guile-response-headers response)\n"
+   "  \"Return the headers of RESPONSE as (web response) wants them.\"\n"
+   "  (map (lambda (entry)\n"
+   "         (let ((name (string->symbol\n"
+   "                      (string-downcase (format #f \"~a\" (car entry))))))\n"
+   "           (cons name\n"
+   "                 (if (string? (cdr entry))\n"
+   "                     (parse-header name (cdr entry))\n"
+   "                     (cdr entry)))))\n"
+   "       (http-response-headers response)))\n"
+   "\n"
+   "(define (guile-response-body response)\n"
+   "  \"Return the body of RESPONSE as (web server) can send it.\"\n"
+   "  (let ((body (http-response-body response))\n"
+   "        (content-type (guile-header-value\n"
+   "                       (or (http-response-header response \"Content-Type\")\n"
+   "                           \"\"))))\n"
+   "    (cond\n"
+   "      ((or (string? body) (bytevector? body)) body)\n"
+   "      ((or (eq? body #f) (json-null? body)) \"\")\n"
+   "      ((string-contains content-type \"json\") (jso->json-string body))\n"
+   "      (else (format #f \"~a\" body)))))\n"
+   "\n"
+   "(define (guile-handler)\n"
+   "  \"Return a handler for (web server)'s run-server.\n"
+   "\n"
+   "Install the handler of every operation in api-handlers first, then pass the\n"
+   "result to run-server:\n"
+   "\n"
+   "  (parameterize ((api-handlers (list (cons 'list-pets my-handler))))\n"
+   "    (run-server (guile-handler) 'http '(#:port 8080)))\"\n"
+   "  (lambda (request body)\n"
+   "    (let ((response (dispatch (guile-request request body))))\n"
+   "      (values (build-response\n"
+   "               #:code (http-response-status response)\n"
+   "               #:headers (guile-response-headers response))\n"
+   "              (guile-response-body response)))))\n"))
+
+;;; Commentary:
 ;;; Modules
 
 (define (emit-route-record)
@@ -382,6 +554,7 @@ value."
                                 'find-route
                                 'dispatch-route
                                 'dispatch
+                                'guile-handler
                                 'routes)
                           (map operation-name operations))))
     (code->string
@@ -409,7 +582,10 @@ value."
                             (if (config-models? config)
                                 (list (config-module config 'models))
                                 '())
-                            '((srfi srfi-1) (srfi srfi-9) (ice-9 regex)))
+                            '((srfi srfi-1) (srfi srfi-9) (ice-9 regex)
+                              (ice-9 format) (rnrs bytevectors)
+                              (web request) (web response) (web uri)
+                              (web http)))
                     '()
                     exports)
        (emit-blank)
@@ -436,6 +612,8 @@ value."
        (emit-handler-lookup)
        (emit-blank)
        (emit-dispatch operations)
+       (emit-blank)
+       (emit "~a" guile-support)
        (emit-blank)
        (for-each (lambda (operation)
                    (emit-operation-procedure ctx operation)

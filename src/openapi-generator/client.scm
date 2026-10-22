@@ -106,19 +106,32 @@ whichever transport carries the bytes, so they live here and each transport adds
 only the calls that actually differ."
   (list
    `(define (encode-request-body body encoding)
-      "Return BODY encoded as the request body ENCODING names."
+      "Return BODY encoded as the request body ENCODING names, as bytes."
       (case encoding
-        ((json) (jso->json-string body))
-        ((form) (query-string body))
-        ((binary) (if (bytevector? body)
-                      (bytevector->string body "ISO-8859-1")
-                      body))
+        ((json) (string->utf8 (jso->json-string body)))
+        ((form) (string->utf8 (form-string body)))
+        ((binary raw) (if (bytevector? body) body (string->utf8 body)))
+        ((text) (string->utf8 body))
         (else body)))
    `(define (response-text body)
       "Return BODY, a string or a bytevector, as text."
       (cond ((string? body) body)
             ((bytevector? body) (utf8->string body))
             (else "")))
+   `(define (encoding-for-content-type content-type default)
+      "Return the encoding implied by CONTENT-TYPE, or DEFAULT when it says nothing."
+      (let ((text (string-downcase
+                   (if (string? content-type)
+                       content-type
+                       (format #f "~a" (or content-type ""))))))
+        (cond
+          ((or (string-contains text "application/json")
+               (string-contains text "+json"))
+           'json)
+          ((string-contains text "text/") 'text)
+          ((string-contains text "x-www-form-urlencoded") 'form)
+          ((string-contains text "multipart/") 'multipart)
+          (else default))))
    `(define (decode-response-body body encoding)
       "Return BODY decoded as the response ENCODING names."
       (case encoding
@@ -128,6 +141,8 @@ only the calls that actually differ."
                json-null
                (json-string->jso text))))
         ((text) (response-text body))
+        ((form) (parse-query (response-text body)))
+        ((multipart binary) body)
         (else body)))
    `(define (content-type-header value)
       "Return VALUE, a Content-Type string, in (web http)'s representation."
@@ -190,7 +205,11 @@ client needs nothing but Guile and guile-json."
            (make-http-response
             (response-code response)
             (response-headers response)
-            (decode-response-body response-body response-encoding)))))
+            (decode-response-body
+             response-body
+             (encoding-for-content-type
+              (header-ref (response-headers response) "Content-Type")
+              response-encoding))))))
     `(define (guile-headers headers)
        "Return HEADERS as (web client) wants them.
 
@@ -272,7 +291,11 @@ bytes, so the transport reads them and lets the generated code decode them."
                  (make-http-response
                   (response-code response)
                   (response-headers response)
-                  (decode-response-body response-body response-encoding))))
+                  (decode-response-body
+                   response-body
+                   (encoding-for-content-type
+                    (header-ref (response-headers response) "Content-Type")
+                    response-encoding)))))
              (lambda () (curl-easy-cleanup curl))))))))
 
 ;;; Commentary:
@@ -433,6 +456,12 @@ all and the HTTP client rightly rejects it."
                     (string-append (car entry) ".bin")))))
           ,(box-expression ctx shape expression #f))))
 
+(define (operation-response-media-types operation)
+  "Return the success response media types of @var{operation} in preference order."
+  (let ((response (operation-success-response operation)))
+    (and response
+         (ordered-media-types (response-media-types response)))))
+
 (define (send-arguments ctx operation)
   "Return the keyword arguments of the @code{client-send} call of @var{operation}.
 
@@ -456,9 +485,10 @@ the same in the body and in the header."
                     (request-shape ctx operation)))
          (request-kind (request-media-kind operation))
          (request-media (operation-request-media-type operation))
-         (response-media (operation-response-media-type operation))
-         (accept (if response-media
-                     (media-type-name response-media)
+         (response-media-types (operation-response-media-types operation))
+         (accept (if (pair? response-media-types)
+                     (string-join (map media-type-name response-media-types)
+                                  ", ")
                      "application/json")))
     (append
      (list #:query (if (null? query)
@@ -530,7 +560,11 @@ value; a path without them is the literal string the specification gives."
                 parameters)
            "\n"))))
    (if (operation-request-body operation)
-       "\n\nThe request body is a record, serialised as JSON."
+       (let ((media-type (operation-request-media-type operation)))
+         (format #f "\n\nThe request body is encoded as ~a."
+                 (if media-type
+                     (media-type-name media-type)
+                     "the declared media type")))
        "")
    (format #f
            "\n\nReturns two values: the decoded body~a and the <http-response>.\n\nCredentials come from AUTH, which defaults to the client's."
@@ -541,6 +575,46 @@ value; a path without them is the literal string the specification gives."
 (define (method-symbol operation)
   "Return the HTTP method of @var{operation} as the symbol the runtime expects."
   (string->symbol (string-upcase (symbol->string (operation-method operation)))))
+
+(define (media-type-match media-type content-type-variable)
+  "Return the form that tests whether CONTENT-TYPE-VARIABLE is @var{media-type}."
+  (case (media-type-kind media-type)
+    ((json) `(string-contains ,content-type-variable "json"))
+    ((text) `(string-contains ,content-type-variable "text/"))
+    (else
+     `(string-contains ,content-type-variable
+                       ,(string-downcase (media-type-name media-type))))))
+
+(define (response-decode-expression ctx operation)
+  "Return the form that decodes a response according to its actual media type.
+
+The transport has already turned the body into a jso value, a string or bytes
+according to the response's Content-Type, so this chooses the schema to apply.
+A response with a single declared media type needs no dispatch."
+  (let* ((media-types (operation-response-media-types operation))
+         (preferred (operation-response-media-type operation)))
+    (define (decode-for media-type)
+      (let* ((schema (and media-type (media-type-schema media-type)))
+             (shape (and schema
+                         (schema-shape (context-document ctx)
+                                       schema
+                                       #:registry (context-response-registry ctx)))))
+        (if shape
+            (unbox-expression ctx shape '(http-response-body response))
+            '(http-response-body response))))
+    (if (or (null? media-types) (null? (cdr media-types)))
+        (decode-for preferred)
+        `(let ((content-type
+                (string-downcase
+                 (format #f "~a"
+                         (or (http-response-header response "Content-Type")
+                             "")))))
+           (cond
+             ,@(map (lambda (media-type)
+                      (list (media-type-match media-type 'content-type)
+                            (decode-for media-type)))
+                    media-types)
+             (else ,(decode-for preferred)))))))
 
 (define (operation-forms ctx operation)
   "Return the forms of the client procedure of @var{operation}.
@@ -555,9 +629,7 @@ before the call so the body and the Content-Type header agree."
          (security (operation-security operation))
          (multipart? (eq? (request-media-kind operation) 'multipart))
          (non-null? (config-non-null-response-payloads? (context-config ctx)))
-         (decode (if shape
-                     (unbox-expression ctx shape '(http-response-body response))
-                     '(http-response-body response)))
+         (decode (response-decode-expression ctx operation))
          (decoded (if (and shape non-null?)
                       `(require-body ,decode response)
                       decode)))
@@ -674,7 +746,7 @@ and one procedure per operation — rendered in one pass."
                ,@(if curl?
                      (append-map (lambda (module) (list #:use-module module))
                                  '((curl) (web response) (ice-9 iconv)
-                                   (rnrs bytevectors)))
+                                   (ice-9 binary-ports) (rnrs bytevectors)))
                      (append-map (lambda (module) (list #:use-module module))
                                  '((web client) (web response) (web uri)
                                    (ice-9 iconv) (rnrs bytevectors))))

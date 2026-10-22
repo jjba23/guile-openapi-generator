@@ -27,6 +27,7 @@
   #:declarative? #t
   #:use-module (veritas veritas)
   #:use-module (ice-9 format)
+  #:use-module (ice-9 iconv)
   #:use-module (ice-9 threads)
   #:use-module (srfi srfi-1)
   #:use-module (srfi srfi-13)
@@ -55,10 +56,17 @@
                           #:headers '((content-type . (text/plain))))
           text))
 
-(define (binary-result status text)
+(define (binary-result status body)
   (values (build-response #:code status
                           #:headers '((content-type . (application/octet-stream))))
-          text))
+          body))
+
+(define (body-length body)
+  "Return the size of BODY, whether it is a string or bytes."
+  (cond
+    ((bytevector? body) (bytevector-length body))
+    ((string? body) (string-length body))
+    (else 0)))
 
 ;;; Server
 
@@ -69,18 +77,27 @@
     (if entry (format #f "~a" (cdr entry)) "")))
 
 (define (body-text body)
-  "Return the request BODY as text, whether it arrived as a string or bytes."
+  "Return the request BODY as text, whether it arrived as a string or bytes.
+
+Binary uploads are part of this test, so a bytevector that is not valid UTF-8
+falls back to a latin-1 reading for the log rather than raising."
   (cond
     ((string? body) body)
-    ((bytevector? body) (utf8->string body))
+    ((bytevector? body)
+     (catch #t
+       (lambda () (utf8->string body))
+       (lambda arguments
+         (bytevector->string body "ISO-8859-1"))))
     (else "")))
 
 (define (handler request body)
-  (let ((path (uri-path (request-uri request)))
-        (method (request-method request))
-        (body (body-text body)))
+  (let* ((path (uri-path (request-uri request)))
+         (method (request-method request))
+         (raw-body body)
+         (body (body-text body)))
     (set! requests
-          (cons (list method path (header-text request 'content-type) body)
+          (cons (list method path (header-text request 'content-type) body
+                      raw-body)
                 requests))
     (cond
       ((and (eq? method 'GET) (string=? path "/plain"))
@@ -88,9 +105,9 @@
       ((and (eq? method 'POST) (string=? path "/echo-plain"))
        (text-result 200 body))
       ((and (eq? method 'GET) (string=? path "/download"))
-       (binary-result 200 "abc"))
+       (binary-result 200 #vu8(0 1 2 255)))
       ((and (eq? method 'POST) (string=? path "/upload"))
-       (text-result 200 (number->string (string-length body))))
+       (text-result 200 (number->string (body-length raw-body))))
       ((and (eq? method 'POST) (string=? path "/form"))
        (let* ((query (parse-query body))
               (name (or (cdr (assoc "name" query)) "")))
@@ -102,12 +119,24 @@
                  (string-contains body "name=\"file\"; filename="))
             "{\"message\":\"multipart\"}"
             "{\"message\":\"bad\"}")))
+      ((and (eq? method 'GET) (string=? path "/form-response"))
+       (values (build-response
+                #:code 200
+                #:headers
+                '((content-type . (application/x-www-form-urlencoded))))
+               "message=form"))
       ((and (eq? method 'GET) (string=? path "/headers"))
        (values (build-response #:code 200
                                #:headers '((content-type . (application/json))
                                            (x-rate-limit . "42")
                                            (x-request-id . "abc")))
                "{\"message\":\"headers\"}"))
+      ((and (eq? method 'GET) (string=? path "/negotiated"))
+       (let* ((query (parse-query (uri-query (request-uri request))))
+              (representation (or (cdr (assoc "representation" query)) "")))
+         (if (string=? representation "text")
+             (text-result 200 "plain")
+             (json-result 200 "{\"message\":\"json\"}"))))
       ((and (eq? method 'GET) (string=? path "/empty"))
        (values (build-response #:code 200
                                #:headers '((content-type . (application/json))))
@@ -194,10 +223,11 @@
                     #t
                     #f)))
          (test "A multipart body has a boundary and a part per value"
-               (let ((body (multipart-body
-                            (list (multipart-part "a" "1")
-                                  (multipart-part "file" "data" "file.bin"))
-                            #:boundary "B")))
+               (let ((body (utf8->string
+                            (multipart-body
+                             (list (multipart-part "a" "1")
+                                   (multipart-part "file" "data" "file.bin"))
+                             #:boundary "B"))))
                  (assert-true (contains? body "--B"))
                  (assert-true (contains? body "name=\"a\""))
                  (assert-true (contains? body "name=\"file\"; filename=\"file.bin\""))
@@ -236,8 +266,9 @@
                                                   (format #f "http://127.0.0.1:~a"
                                                           port)))))))
                         (assert-equal
-                         #:expect '("hello" "hello" "3" "3" "Ada"
-                                    "multipart" "42" "abc" "200")
+                         #:expect '("hello" "hello" "4" "4" "Ada"
+                                    "multipart" "42" "abc" "form"
+                                    "plain" "200")
                          #:got (lines output))))
                     #:input (fixture "media.yaml")
                     #:controllers 'none
@@ -269,7 +300,38 @@
                        (if (string-contains (caddr multipart)
                                             "multipart/form-data")
                            #t
-                           #f)))))))))
+                           #f)))))))
+
+         (test "The libcurl transport sends bytes, not a latin-1 round-trip"
+               (set! requests '())
+               (with-server
+                (lambda (port)
+                  (with-generated 'media-curl
+                    (lambda (directory)
+                      (let ((output
+                             (run-program
+                              directory
+                              (list '(media-curl client)
+                                    '(media-curl models))
+                              "media-client"
+                              #:bindings
+                              (list (cons 'base-url
+                                          (format #f "~s"
+                                                  (format #f "http://127.0.0.1:~a"
+                                                          port)))))))
+                        (assert-equal
+                         #:expect '("hello" "hello" "4" "4" "Ada"
+                                    "multipart" "42" "abc" "form"
+                                    "plain" "200")
+                         #:got (lines output))
+                        (let ((upload (request-for 'POST "/upload")))
+                          (assert-equal
+                           #:expect #vu8(0 1 2 255)
+                           #:got (and upload (list-ref upload 4))))))
+                    #:input (fixture "media.yaml")
+                    #:controllers 'none
+                    #:http 'curl
+                    #:non-null-response-payloads? #t))))))
 
 (define controllers-suite
   (suite "A dispatcher across media types"
@@ -279,7 +341,9 @@
                (with-generated 'media-controllers
                  (lambda (directory)
                    (assert-equal
-                    #:expect '("hello" "Ada")
+                    #:expect '("200 {\"name\":\"Ada\",\"count\":3} (application/json)"
+                               "200 bytes (text/plain (charset . utf-8))"
+                               "hello" "Ada 3 #t" "T data" "hello" "json")
                     #:got (lines (run-program
                                   directory
                                   (list '(media-controllers controllers)

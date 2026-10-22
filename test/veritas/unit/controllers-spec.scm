@@ -69,6 +69,16 @@
                (assert-true (contains? petstore-text
                                        "(unimplemented-operation operation request)")))
 
+         (test "The portable controller exports a run-server adapter"
+               (assert-true (contains? petstore-text
+                                       "(define (guile-handler)"))
+               (assert-true (contains? petstore-text
+                                       "(define (guile-request request body)"))
+               (assert-true (contains? petstore-text
+                                       "(utf8->string body)"))
+               (assert-true (contains? petstore-text
+                                       "guile-handler")))
+
          (test "An operation decodes its parameters"
                (assert-true (contains? petstore-text
                                        "(cons 'limit (let ((raw (http-request-query-ref request \"limit\")))"))

@@ -1,0 +1,5 @@
+input: openapi.yaml
+output: gen
+module: todo
+controllers: vanilla
+http: guile

@@ -1,0 +1,89 @@
+openapi: 3.0.3
+info:
+  title: Todo
+  version: 1.0.0
+  description: |
+    A tiny Todo API used by the "build an app" tutorial.  It has one
+    collection, one item route, a request model and a response model.
+servers:
+  - url: http://127.0.0.1:8080
+paths:
+  /todos:
+    get:
+      operationId: listTodos
+      summary: List every todo
+      responses:
+        '200':
+          description: All todos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Todo'
+    post:
+      operationId: createTodo
+      summary: Add a todo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewTodo'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Todo'
+  /todos/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    get:
+      operationId: getTodo
+      summary: Read one todo
+      responses:
+        '200':
+          description: One todo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Todo'
+        '404':
+          description: No such todo
+    delete:
+      operationId: deleteTodo
+      summary: Remove a todo
+      responses:
+        '204':
+          description: Deleted
+components:
+  schemas:
+    Todo:
+      type: object
+      required: [id, title, done]
+      properties:
+        id:
+          type: integer
+          format: int64
+        title:
+          type: string
+          minLength: 1
+        done:
+          type: boolean
+    NewTodo:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+        done:
+          type: boolean
+          default: false

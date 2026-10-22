@@ -17,12 +17,15 @@
               (string-length bytes))))
 
 (receive (size response)
-    (upload client #:body "abc")
+    (upload client #:body #vu8(0 1 2 255))
   (format #t "~a~%" size))
 
 (receive (form response)
     (post-form client
-               #:body (make-post-form-request #:name "Ada" #:note "x"))
+               #:body (make-post-form-request #:name "Ada"
+                                              #:note "x"
+                                              #:count 3
+                                              #:subscribe #t))
   (format #t "~a~%" (form-result-message form)))
 
 (receive (multi response)
@@ -36,6 +39,17 @@
   (let ((headers (get-headers-response-headers response)))
     (format #t "~a~%" (cdr (assoc "X-Rate-Limit" headers)))
     (format #t "~a~%" (cdr (assoc "X-Request-Id" headers)))))
+
+;; A form response is parsed into its record before the model sees it.
+(receive (form-response response)
+    (get-form-response client)
+  (format #t "~a~%" (form-result-message form-response)))
+
+;; The server chooses text/plain even though JSON is the preferred type; the
+;; client has to decode the representation it actually received.
+(receive (representation response)
+    (get-negotiated client #:representation "text")
+  (format #t "~a~%" representation))
 
 ;; A declared success body that comes back empty is a contract violation.
 (format #t "~a~%"

@@ -111,7 +111,26 @@ report is only useful for its keys and for the assertions made here."
                                                       "petstore/README.org"))))
                      (assert-true (contains? readme "#+title: Petstore"))
                      (assert-true (contains? readme
-                                             "| GET | /pets | =list-pets= |"))))))
+                                             "| GET | /pets | =list-pets= |"))
+                     (assert-true (contains? readme "* Serving the API"))
+                     (assert-true (contains? readme "guile-handler"))
+                     (assert-true (contains? readme
+                                             "(run-server (guile-handler)"))
+                     (assert-true (contains? readme "* Calling the API"))
+                     (assert-true (contains? readme "(list-pets client)"))))))
+
+         (test "The documented Todo example generates"
+               (with-temporary-directory "todo-example"
+                 (lambda (directory)
+                   (let ((report (generate #:input "examples/todo/openapi.yaml"
+                                           #:output directory
+                                           #:module "todo")))
+                     (assert-equal #:expect '(models controllers client readme)
+                                   #:got (map car report))
+                     (assert-true
+                      (contains? (file-contents
+                                  (join directory "todo/README.org"))
+                                 "guile-handler"))))))
 
          (test "Models only, when asked"
                (let ((report (generate-and-check

@@ -7,3 +7,6 @@ reports/
 
 # generated trees used by the test suite
 test/generated/
+
+# the generated tree of the runnable example
+examples/todo/gen/
