@@ -36,6 +36,7 @@
             config-controllers
             config-http
             config-models?
+            config-readme?
             config-runtime-module
             config-jso-module
             config-json-module
@@ -46,14 +47,22 @@
             config-module
             config-file
             config-validate?
+            config-model-suffix
+            config-header?
+            config-header-text
+            config-dependencies
             controller-backends
-            http-backends))
+            http-backends
+            dependency-backends))
 
 (define controller-backends
   '(vanilla artanis))
 
 (define http-backends
   '(guile curl))
+
+(define dependency-backends
+  '(none guix))
 
 (define-record-type <config>
   (make-config output
@@ -69,7 +78,12 @@
                generator-version
                self-contained?
                base-url
-               validate?)
+               validate?
+               readme?
+               model-suffix
+               header?
+               header-text
+               dependencies)
   config?
   (output config-output)
   (root config-root)
@@ -84,7 +98,12 @@
   (generator-version config-generator-version)
   (self-contained? config-self-contained?)
   (base-url config-base-url)
-  (validate? config-validate?))
+  (validate? config-validate?)
+  (readme? config-readme?)
+  (model-suffix config-model-suffix)
+  (header? config-header?)
+  (header-text config-header-text)
+  (dependencies config-dependencies))
 
 (define* (config-module config part)
   "Return the module name of one generated component, e.g. @code{(petstore models)}.

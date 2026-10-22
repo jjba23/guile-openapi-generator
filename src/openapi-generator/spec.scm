@@ -294,8 +294,11 @@
 ;;; Commentary:
 ;;; Parsing
 
-(define* (parse-spec document #:key (source "<string>"))
-  "Turn an OpenAPI 3.x @var{document} into a @code{<spec>}."
+(define* (parse-spec document #:key (source "<string>") (operation-id-transform #f))
+  "Turn an OpenAPI 3.x @var{document} into a @code{<spec>}.
+
+@var{operation-id-transform}, when given, is a procedure applied to every
+operationId before it becomes a generated name."
   (let* ((info (jso-ref document "info"))
          (security-schemes (parse-security-schemes document))
          (global-security (parse-security (jso-ref document "security")))
@@ -304,7 +307,8 @@
                (or (jso-ref info "title") (document-title document))
                (jso-ref info "description")
                (parse-servers document)
-               (parse-operations document global-security)
+               (parse-operations document global-security
+                                 operation-id-transform)
                schemas
                security-schemes
                global-security
@@ -379,20 +383,21 @@ satisfied together with its siblings."
   "Return @code{#t} when @var{name} is a component schema of @var{spec}."
   (and (member name (spec-schema-names spec)) #t))
 
-(define (parse-operations document global-security)
+(define (parse-operations document global-security transform)
   "Return every operation of @var{document} as a @code{<operation>}."
   (let ((paths (jso-ref document "paths")))
     (append-map (lambda (path-entry)
                   (parse-path-item document
                                    (car path-entry)
                                    (resolve-ref document (cdr path-entry))
-                                   global-security))
+                                   global-security
+                                   transform))
                 (if (jso-object? paths) paths '()))))
 
 (define http-methods
   '(get put post delete options head patch trace))
 
-(define (parse-path-item document path path-item global-security)
+(define (parse-path-item document path path-item global-security transform)
   (let ((path-parameters (parse-parameter-list document
                                                (jso-ref path-item "parameters"))))
     (append-map (lambda (entry)
@@ -403,16 +408,20 @@ satisfied together with its siblings."
                                                method
                                                (cdr entry)
                                                path-parameters
-                                               global-security))
+                                               global-security
+                                               transform))
                         '())))
                 (if (jso-object? path-item) path-item '()))))
 
 (define (parse-operation document path method node path-parameters
-                         global-security)
+                         global-security transform)
   (let* ((own-parameters (parse-parameter-list document
                                                (jso-ref node "parameters")))
          (parameters (merge-parameters path-parameters own-parameters))
-         (operation-id (jso-ref node "operationId"))
+         (raw-operation-id (jso-ref node "operationId"))
+         (operation-id (if (and transform (string? raw-operation-id))
+                           (transform raw-operation-id)
+                           raw-operation-id))
          (security-node (jso-ref node "security"))
          (security (if (jso-has? node "security")
                        (parse-security security-node)

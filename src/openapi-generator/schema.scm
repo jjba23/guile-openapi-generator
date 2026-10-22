@@ -216,21 +216,27 @@ components first, in the order they were registered."
                                             (registry-names registry)))
         name)))
 
-(define* (registry-for-spec spec #:key (extra-names? #t))
+(define* (registry-for-spec spec #:key (extra-names? #t) (model-suffix ""))
   "Return the registry naming every record the generator has to emit for @var{spec}.
 
 The component schemas keep their specification names; inline schemas are named
 after the place they appear in: @code{create-pet-request},
-@code{list-pets-response}, @code{create-pet-request-status}."
+@code{list-pets-response}, @code{create-pet-request-status}.
+
+@var{model-suffix} is appended to every model name at the point it enters the
+registry, so a reference to a schema and the definition of that schema always
+agree.  A nested inline model keeps the suffix of the model it was named after,
+which is what keeps a second specification in the same namespace apart."
   (let ((registry (new-registry)))
     (for-each (lambda (schema)
-                (registry-register! registry
-                                    (named-schema-name schema)
-                                    (named-schema-schema schema)))
+                (registry-register!
+                 registry
+                 (string-append (named-schema-name schema) model-suffix)
+                 (named-schema-schema schema)))
               (spec-schemas spec))
     (when extra-names?
       (for-each (lambda (operation)
-                  (register-operation! registry operation))
+                  (register-operation! registry operation model-suffix))
                 (spec-operations spec)))
     ;; Nested inline objects inside every registered schema.
     (for-each (lambda (entry)
@@ -238,12 +244,19 @@ after the place they appear in: @code{create-pet-request},
               (registry-named-schemas registry))
     registry))
 
-(define (register-operation! registry operation)
+(define (model-name base suffix)
+  "Return @var{base} with @var{suffix} appended, unless it is empty."
+  (if (or (not suffix) (string-null? suffix))
+      base
+      (string-append base suffix)))
+
+(define (register-operation! registry operation model-suffix)
   (let ((name (symbol->string (operation-name operation))))
     (let ((media-type (operation-request-media-type operation)))
       (when (and media-type (inline-object? (media-type-schema media-type)))
         (registry-register! registry
-                            (string-append name "-request")
+                            (model-name (string-append name "-request")
+                                        model-suffix)
                             (media-type-schema media-type))))
     (for-each (lambda (response)
                 (for-each (lambda (media-type)
@@ -251,12 +264,14 @@ after the place they appear in: @code{create-pet-request},
                               (when (inline-object? schema)
                                 (registry-register!
                                  registry
-                                 (if (member (response-status response)
-                                             '("200" "default"))
-                                     (string-append name "-response")
-                                     (string-append name "-"
-                                                    (response-status response)
-                                                    "-response"))
+                                 (model-name
+                                  (if (member (response-status response)
+                                              '("200" "default"))
+                                      (string-append name "-response")
+                                      (string-append name "-"
+                                                     (response-status response)
+                                                     "-response"))
+                                  model-suffix)
                                  schema))))
                           (response-media-types response)))
               (operation-responses operation))
@@ -265,9 +280,11 @@ after the place they appear in: @code{create-pet-request},
                   (when (and (jso-object? schema)
                              (jso-ref schema "properties"))
                     (registry-register! registry
-                                        (string-append name "-"
-                                                       (symbol->string
-                                                        (parameter-field parameter)))
+                                        (model-name
+                                         (string-append name "-"
+                                                        (symbol->string
+                                                         (parameter-field parameter)))
+                                         model-suffix)
                                         schema))))
               (operation-parameters operation))))
 

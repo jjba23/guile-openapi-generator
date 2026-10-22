@@ -89,8 +89,13 @@
                       (controllers 'vanilla)
                       (http 'guile)
                       (models? #t)
+                      (readme? #t)
                       (base-url #f)
                       (self-contained? #f)
+                      (model-suffix "")
+                      (header? #t)
+                      (header-text #f)
+                      (dependencies 'none)
                       (runtime-module '(openapi-generator runtime))
                       (jso-module '(openapi-generator jso)))
   "Return a configuration for the tests."
@@ -107,7 +112,12 @@
                "0.0.0-test"
                self-contained?
                base-url
-               #t))
+               #t
+               readme?
+               model-suffix
+               header?
+               header-text
+               dependencies))
 
 ;;; Commentary:
 ;;; Temporary directories and generated trees

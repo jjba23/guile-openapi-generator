@@ -1,0 +1,8 @@
+{
+  "input": "test/fixtures/mini.yaml",
+  "output": "generated",
+  "module": "json-configured",
+  "targets": ["models"],
+  "modelSuffix": "Json",
+  "header": false
+}

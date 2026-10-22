@@ -1,0 +1,13 @@
+# A configuration file for the generator's own tests.
+#
+# It deliberately mixes spellings: modelSuffix is camelCase and
+# operation_id_transform is snake_case, while dependencies is plain kebab.
+# All of them normalise to the same option names.
+input: test/fixtures/petstore.yaml
+output: generated
+module: configured
+targets: [models, readme]
+modelSuffix: Dto
+operation_id_transform: '^V2_(.*)$:v2-\1'
+header: true
+dependencies: guix

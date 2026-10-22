@@ -169,10 +169,16 @@ installed one."
                    (controllers 'vanilla)
                    (http 'guile)
                    (models? #t)
+                   (readme? #t)
                    (base-url #f)
                    (self-contained? #f)
                    (source-name #f)
-                   (validate? #t))
+                   (validate? #t)
+                   (model-suffix "")
+                   (operation-id-transform #f)
+                   (header? #t)
+                   (header-text #f)
+                   (dependencies 'none))
   "Generate Guile code from an OpenAPI 3.x specification.
 
 Exactly one of @var{document} (a parsed document, as a jso value) and
@@ -181,9 +187,20 @@ Exactly one of @var{document} (a parsed document, as a jso value) and
 @var{output} is the directory the files are written to; @var{module} is the root
 module name, defaulting to the API title; @var{controllers} is @code{vanilla},
 @code{artanis} or @code{none}; @var{http} is @code{guile}, @code{curl} or
-@code{none}; @var{models?} says whether the record module is generated;
-@var{base-url} overrides the first server of the specification;
-@var{self-contained?} copies the runtime next to the generated code.
+@code{none}; @var{models?} says whether the record module is generated and
+@var{readme?} whether the generated README is written; @var{base-url} overrides
+the first server of the specification; @var{self-contained?} copies the runtime
+next to the generated code.
+
+@var{model-suffix} is appended to every generated model name, which keeps two
+specifications that share a namespace apart.  @var{operation-id-transform} is a
+procedure (or a @code{REGEX:REPLACEMENT} string) applied to operationIds before
+they become procedure names.
+
+@var{header?} controls the banner comment of every generated file and
+@var{header-text} adds a paragraph to it, for a license or a disclaimer.
+@var{dependencies} is @code{none} or @code{guix}: the latter writes a
+@code{dependencies.scm} manifest next to the generated tree.
 
 Returns an alist of component to the path that was written:
 
@@ -193,7 +210,12 @@ Returns an alist of component to the path that was written:
 ;;     (controllers . \"gen/petstore/controllers.scm\")
 ;;     (client . \"gen/petstore/client.scm\"))
 @end example"
-  (let* ((parsed (or document
+  (let* ((transform (cond ((procedure? operation-id-transform)
+                           operation-id-transform)
+                          ((string? operation-id-transform)
+                           (parse-operation-id-transform operation-id-transform))
+                          (else #f)))
+         (parsed (or document
                      (read-spec input #:validate? validate?)
                      (error "No specification given: pass #:input or #:document")))
          (_ (when (and validate? document)
@@ -202,7 +224,8 @@ Returns an alist of component to the path that was written:
               ;; same thing whichever way the specification arrived.
               (validate-document parsed (or source-name input "<document>"))))
          (spec (parse-spec parsed
-                           #:source (or source-name input "<document>")))
+                           #:source (or source-name input "<document>")
+                           #:operation-id-transform transform))
          (root (root-module-name spec module))
          (root-module (list (string->symbol root)))
          (self-contained (and self-contained? #t))
@@ -224,7 +247,12 @@ Returns an alist of component to the path that was written:
                               generator-version
                               self-contained
                               base-url
-                              validate?))
+                              validate?
+                              readme?
+                              (or model-suffix "")
+                              header?
+                              header-text
+                              dependencies))
          (written '()))
     (define (record! component relative content)
       (set! written (cons (cons component
@@ -250,12 +278,47 @@ Returns an alist of component to the path that was written:
       (record! 'client
                (config-file config 'client)
                (emit-client spec config)))
-    (record! 'readme
-             (string-append (string-join (map symbol->string (config-module config #f))
-                                         "/")
-                            "/README.org")
-             (generated-readme spec config written))
+    (when readme?
+      (record! 'readme
+               (string-append (string-join (map symbol->string
+                                                (config-module config #f))
+                                           "/")
+                              "/README.org")
+               (generated-readme spec config written)))
+    (when (eq? dependencies 'guix)
+      (record! 'dependencies
+               "dependencies.scm"
+               (dependencies-source config)))
     (reverse written)))
+
+(define (dependencies-source config)
+  "Return a Guix manifest for the runtime dependencies of the generated code.
+
+The manifest names packages rather than store paths, so it can be used with
+@code{guix shell -m dependencies.scm} on any machine.  guile-json is always
+needed; guile-curl and Artanis are added only when the generated code uses them."
+  (let* ((packages (append '("guile" "guile-json")
+                           (if (eq? (config-http config) 'curl)
+                               '("guile-curl")
+                               '())
+                           (if (eq? (config-controllers config) 'artanis)
+                               '("artanis")
+                               '())))
+         (root (string-join (map symbol->string (config-module config #f)) "/")))
+    (string-append
+     ";; -*- mode: scheme; coding: utf-8 -*-\n"
+     (format #f ";; Runtime dependencies of the generated ~a code.\n" root)
+     ";; Use with: guix shell -m dependencies.scm\n\n"
+     "(use-modules (gnu packages)\n"
+     "             (guix packages))\n\n"
+     "(packages->manifest\n"
+     " (map specification->package\n"
+     "      (list "
+     (string-join (map (lambda (package)
+                         (format #f "~s" package))
+                       packages)
+                  " ")
+     ")))\n")))
 
 (define* (generate-from-file path #:rest options)
   "Generate code from the specification stored in @var{path}."
@@ -275,6 +338,7 @@ The text is parsed here but validated by @code{generate}, so a caller that passe
   "Return the source of the README of the generated tree."
   (let* ((root (string-join (map symbol->string (config-module config #f)) "/"))
          (name (identifier (to-kebab (config-root config))))
+         (suffix (or (config-model-suffix config) ""))
          (operations (spec-operations spec))
          (schemas (spec-schemas spec))
          (files (map car written)))
@@ -318,9 +382,11 @@ The text is parsed here but validated by @code{generate}, so a caller that passe
      (format #f "~%* Schemas~%~%")
      (apply string-append
             (map (lambda (schema)
-                   (format #f "- =~a= --- =~a= records~%"
-                           (named-schema-name schema)
-                           (to-kebab (named-schema-name schema))))
+                   (let ((schema-name (string-append (named-schema-name schema)
+                                                     suffix)))
+                     (format #f "- =~a= --- =~a= records~%"
+                             schema-name
+                             (to-kebab schema-name))))
                  schemas))
      (format #f "~%* Using the code~%~%#+begin_src scheme~%")
      (if (member 'models files)
@@ -328,7 +394,8 @@ The text is parsed here but validated by @code{generate}, so a caller that passe
          "")
      (if (and (member 'models files) (pair? schemas))
          (format #f "(define value (make-~a #:name \"...\"))~%~%"
-                 (to-kebab (named-schema-name (car schemas))))
+                 (to-kebab (string-append (named-schema-name (car schemas))
+                                          suffix)))
          "")
      (if (member 'client files)
          (format #f "(use-modules (~a client) (~a runtime))~%~%(define client (make-api-client))~%"

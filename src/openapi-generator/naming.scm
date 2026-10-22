@@ -59,6 +59,7 @@
             accessor-name
             enum-constant-name
             operation-procedure-name
+            parse-operation-id-transform
             path-slug
             module-path
             file-name
@@ -308,6 +309,67 @@ stable when a specification has no identifiers at all.
        (string-append (string-downcase (symbol->string method))
                       "-"
                       (path-slug path)))))
+
+;;; Commentary:
+;;; Renaming operationIds
+
+(define (replacement-items replacement)
+  "Split a replacement template into @code{regexp-substitute} items.
+
+@code{\\1} through @code{\\9} refer to the corresponding capture group; every
+other character is literal text.  The items are what
+@code{regexp-substitute/global} consumes after its @code{'pre} marker."
+  (let loop ((index 0) (start 0) (items '()))
+    (define (flush end)
+      (if (< start end)
+          (cons (substring replacement start end) items)
+          items))
+    (cond
+      ((>= index (string-length replacement))
+       (reverse (flush index)))
+      ((and (char=? (string-ref replacement index) #\\)
+            (< (+ index 1) (string-length replacement))
+            (char-numeric? (string-ref replacement (+ index 1))))
+       (let ((group (string->number
+                     (string (string-ref replacement (+ index 1))))))
+         (loop (+ index 2) (+ index 2) (cons group (flush index)))))
+      (else
+       (loop (+ index 1) start items)))))
+
+(define (parse-operation-id-transform spec)
+  "Return the procedure that renames an operationId as @var{spec} says.
+
+@var{spec} is @code{REGEX:REPLACEMENT}.  The replacement may refer to capture
+groups with @code{\\1} through @code{\\9}; everything else is literal.  The
+returned procedure takes the operationId and returns the text the naming rules
+should start from, which is how a specification full of
+@code{V2_get_pets}-style identifiers is turned into stable
+@code{fetch-pets}-style names without editing the document.
+
+@example
+((parse-operation-id-transform \"^V2_(.*)$:v2-\\\\1\") \"V2_pets\")
+;; => \"v2-pets\"
+@end example"
+  (let ((colon (string-index spec #\:)))
+    (unless colon
+      (error (format #f
+                     "--operation-id-transform expects REGEX:REPLACEMENT, got ~s"
+                     spec)))
+    (let* ((pattern (substring spec 0 colon))
+           (replacement (substring spec (+ colon 1) (string-length spec)))
+           (regexp (catch #t
+                     (lambda () (make-regexp pattern))
+                     (lambda (key . arguments)
+                       (error (format #f
+                                      "Invalid operationId transform regex ~s: ~a"
+                                      pattern
+                                      (or (false-if-exception
+                                           (cadr arguments))
+                                          key))))))
+           (items (replacement-items replacement)))
+      (lambda (text)
+        (apply regexp-substitute/global #f regexp text
+               (append (list 'pre) items (list 'post)))))))
 
 ;;; Commentary:
 ;;; Modules and files

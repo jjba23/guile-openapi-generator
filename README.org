@@ -221,18 +221,56 @@ Usage: openapi-generator generate --input SPEC --output DIR [options]
 
   --help (-h)                   Show this help and exit.
   --version (-v)                Show the version and exit.
+  --config VALUE                Read options from a YAML or JSON file; flags override it.
   --input (-i) VALUE            The OpenAPI 3.x specification to read (.yaml or .json).
   --output (-o) VALUE           The directory to write the generated code to.
   --module (-m) VALUE           The root module name (default: the API title).
+  --targets (-t) VALUE          Comma-separated: models, controllers, client, readme.
   --controllers (-c) VALUE      vanilla, artanis or none (default: vanilla).
   --http (-H) VALUE             guile, curl or none (default: guile).
   --no-models                   Generate no record module.
+  --model-suffix VALUE          Append SUFFIX to every generated model name.
+  --operation-id-transform VALUE Rename operationIds as REGEX:REPLACEMENT.
   --base-url VALUE              Override the first server URL of the specification.
   --self-contained              Copy the runtime modules next to the generated code.
+  --no-validate                 Do not check that the input is OpenAPI 3.x.
+  --no-header                   Omit the banner comment from generated files.
+  --header-file VALUE           Add the contents of FILE to the generated banner.
+  --dependencies VALUE          none or guix: write a dependencies.scm manifest.
 #+end_example
 
 An unknown value is an error rather than a silent fallback: a typo in
 =--controllers artanis= should not leave you with a plain Guile server.
+
+** Configuration file
+
+A checked-in file can carry the options a project always uses.  It is YAML or
+JSON, keys are normalised so =baseUrl=, =base_url= and =base-url= are the same
+option, and a command-line flag overrides the file:
+
+#+begin_src yaml
+input: api/openapi.yaml
+output: gen
+module: petstore
+targets: [models, client]
+modelSuffix: Dto
+operation-id-transform: '^V2_(.*)$:v2-\1'
+header: true
+header-file: LICENSE-HEADER.txt
+dependencies: guix
+#+end_src
+
+#+begin_src shell
+guile -L ./src -c '((@ (openapi-generator cli) main)
+                    (list "generate" "--config" "openapi-generator.yaml"))'
+#+end_src
+
+=--targets= is what makes the file useful to more than one consumer: a build can
+generate only =models= for documentation, or =models,client= for an application,
+without changing the rest of the configuration.  Generating a client or a
+controller always brings the models those need.  =--dependencies guix= writes a
+=dependencies.scm= manifest for =guix shell -m=, and =--no-header= /
+=--header-file= control the banner every generated file starts with.
 
 ** From Scheme instead
 
@@ -267,9 +305,15 @@ Every flag has a keyword argument, and the same run is a function call:
 | =#:controllers=     | ='vanilla=    | =vanilla=, =artanis= or =none=                              |
 | =#:http=            | ='guile=      | =guile=, =curl= or =none=                                   |
 | =#:models?=         | =#t=         | generate the record module                                 |
+| =#:readme?=         | =#t=         | generate the tree's README                                 |
 | =#:base-url=        | the first server | override the URL the client defaults to                |
 | =#:self-contained?= | =#f=         | copy the runtime next to the generated code                |
 | =#:validate?=       | =#t=         | validate the specification before generating               |
+| =#:model-suffix=    | =""=         | append a suffix to every generated model name             |
+| =#:operation-id-transform= | —     | a procedure or =REGEX:REPLACEMENT= applied to operationIds  |
+| =#:header?=         | =#t=         | write the banner comment at the top of generated files     |
+| =#:header-text=     | —            | an extra banner paragraph (license or disclaimer)          |
+| =#:dependencies=    | ='none=      | =none= or =guix= to write a =dependencies.scm= manifest     |
 
 * What gets generated
 

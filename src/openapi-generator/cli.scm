@@ -36,39 +36,58 @@
   #:use-module (ice-9 format)
   #:use-module (ice-9 getopt-long)
   #:use-module (ice-9 match)
+  #:use-module (ice-9 textual-ports)
   #:use-module (srfi srfi-1)
   #:use-module (srfi srfi-13)
   #:use-module (openapi-generator generator)
   #:use-module (openapi-generator config)
+  #:use-module (openapi-generator config-file)
   #:export (main
             options
             usage
             parse-backend
-            parse-controllers))
+            parse-controllers
+            parse-dependencies))
 
 (define option-descriptions
   '((help . "Show this help and exit.")
     (version . "Show the version and exit.")
+    (config . "Read options from a YAML or JSON file; flags override it.")
     (input . "The OpenAPI 3.x specification to read (.yaml or .json).")
     (output . "The directory to write the generated code to.")
     (module . "The root module name (default: the API title).")
+    (targets . "Comma-separated: models, controllers, client, readme.")
     (controllers . "vanilla, artanis or none (default: vanilla).")
     (http . "guile, curl or none (default: guile).")
     (no-models . "Generate no record module.")
+    (model-suffix . "Append SUFFIX to every generated model name.")
+    (operation-id-transform . "Rename operationIds as REGEX:REPLACEMENT.")
     (base-url . "Override the first server URL of the specification.")
-    (self-contained . "Copy the runtime modules next to the generated code.")))
+    (self-contained . "Copy the runtime modules next to the generated code.")
+    (no-validate . "Do not check that the input is OpenAPI 3.x.")
+    (no-header . "Omit the banner comment from generated files.")
+    (header-file . "Add the contents of FILE to the generated banner.")
+    (dependencies . "none or guix: write a dependencies.scm manifest.")))
 
 (define options
   '((help (single-char #\h))
     (version (single-char #\v))
+    (config (value #t))
     (input (single-char #\i) (value #t))
     (output (single-char #\o) (value #t))
     (module (single-char #\m) (value #t))
+    (targets (single-char #\t) (value #t))
     (controllers (single-char #\c) (value #t))
     (http (single-char #\H) (value #t))
     (no-models)
+    (model-suffix (value #t))
+    (operation-id-transform (value #t))
     (base-url (value #t))
-    (self-contained)))
+    (self-contained)
+    (no-validate)
+    (no-header)
+    (header-file (value #t))
+    (dependencies (value #t))))
 
 (define (usage port)
   "Write the usage of the command to @var{port}."
@@ -90,7 +109,11 @@
   (format port
           "  openapi-generator generate -i petstore.yaml -o gen~%")
   (format port
-          "  openapi-generator generate -i petstore.yaml -o gen -c artanis -H curl~%"))
+          "  openapi-generator generate -i petstore.yaml -o gen -c artanis -H curl~%")
+  (format port
+          "  openapi-generator generate --config openapi-generator.yaml~%")
+  (format port
+          "  openapi-generator generate -i api.yaml -o gen -t models,client~%"))
 
 (define (option-field option name)
   "Return the value of the @var{name} property of @var{option}, or @code{#f}.
@@ -113,7 +136,8 @@ a short spelling would print as @code{(-(h))}."
 
 (define (parse-controllers value)
   "Return the controller backend named by @var{value}."
-  (let ((backend (string->symbol (string-downcase value))))
+  (let ((backend (string->symbol
+                  (string-downcase (format #f "~a" (or value "vanilla"))))))
     (if (memq backend (cons 'none controller-backends))
         backend
         (error (format #f
@@ -125,7 +149,8 @@ a short spelling would print as @code{(-(h))}."
 
 (define (parse-backend value)
   "Return the HTTP backend named by @var{value}."
-  (let ((backend (string->symbol (string-downcase value))))
+  (let ((backend (string->symbol
+                  (string-downcase (format #f "~a" (or value "guile"))))))
     (if (memq backend (cons 'none http-backends))
         backend
         (error (format #f
@@ -135,21 +160,76 @@ a short spelling would print as @code{(-(h))}."
                                          (cons 'none http-backends))
                                     ", "))))))
 
+(define (parse-dependencies value)
+  "Return the dependency backend named by @var{value}."
+  (let ((backend (string->symbol
+                  (string-downcase (format #f "~a" (or value "none"))))))
+    (if (memq backend dependency-backends)
+        backend
+        (error (format #f
+                       "Unknown dependency backend ~a; expected one of ~a"
+                       value
+                       (string-join (map symbol->string dependency-backends)
+                                    ", "))))))
+
+(define (option-supplied? parsed key)
+  "Return @code{#t} when @var{key} was present on the command line."
+  (and (assq key parsed) #t))
+
+(define (resolve-option parsed config key default)
+  "Return the command-line value of @var{key}, the config-file value, or @var{default}."
+  (if (option-supplied? parsed key)
+      (assq-ref parsed key)
+      (config-ref config key default)))
+
+(define (read-file-text path)
+  "Return the contents of @var{path}, or @code{#f} when no path was given."
+  (and path (call-with-input-file path get-string-all)))
+
+(define (exception-message key arguments)
+  "Return the readable message of an exception, with its arguments filled in.
+
+Guile's @code{error} throws @code{misc-error} with a format string and the
+arguments for it, so the useful text is the first element of the third part of
+the arguments, formatted.  Other throws fall back to their second argument or,
+when there is none, to the key itself."
+  (define (apply-error payload)
+    (and (pair? payload)
+         (string? (car payload))
+         (catch #t
+           (lambda () (apply format #f (car payload) (cdr payload)))
+           (lambda rest #f))))
+  (or (and (pair? arguments)
+           (pair? (cdr arguments))
+           (pair? (cdr (cdr arguments)))
+           (apply-error (car (cdr (cdr arguments)))))
+      (and (pair? arguments)
+           (pair? (cdr arguments))
+           (format #f "~a" (car (cdr arguments))))
+      (format #f "~a" key)))
+
 (define* (main #:optional (arguments (cdr (command-line))))
   "Run the generator from the command line @var{arguments} and return an exit code.
 
 The arguments start after the program name, and the first of them may be the
 word @code{generate}, which is accepted so that the invocation reads like the
-other task runners in this project."
+other task runners in this project.
+
+Options are resolved in this order: the command line, then the file named by
+@code{--config}, then the built-in default.  A flag therefore only has to be
+written when it differs from the file."
   (let ((arguments (if (and (pair? arguments)
                             (string=? (car arguments) "generate"))
                        (cdr arguments)
                        arguments)))
     (catch #t
       (lambda ()
-        (let ((parsed (getopt-long (cons "openapi-generator" arguments)
-                                   options
-                                   #:stop-at-first-non-option #t)))
+        (let* ((parsed (getopt-long (cons "openapi-generator" arguments)
+                                    options
+                                    #:stop-at-first-non-option #t))
+               (config (if (option-supplied? parsed 'config)
+                           (read-config-file (option-ref parsed 'config #f))
+                           '())))
           (cond
             ((option-ref parsed 'help #f)
              (usage (current-output-port))
@@ -158,31 +238,90 @@ other task runners in this project."
              (format #t "guile-openapi-generator ~a~%" generator-version)
              0)
             (else
-             (let ((input (option-ref parsed 'input #f))
-                   (output (option-ref parsed 'output "generated")))
+             (let* ((targets (config-targets
+                              (or (option-ref parsed 'targets #f)
+                                  (config-ref config 'targets #f))))
+                    (input (resolve-option parsed config 'input #f))
+                    (output (resolve-option parsed config 'output "generated"))
+                    (controllers-value (resolve-option parsed config
+                                                       'controllers "vanilla"))
+                    (http-value (resolve-option parsed config 'http "guile"))
+                    (controllers (if (and targets
+                                          (not (memq 'controllers targets)))
+                                     'none
+                                     (parse-controllers controllers-value)))
+                    (http (if (and targets (not (memq 'client targets)))
+                              'none
+                              (parse-backend http-value)))
+                    (models? (if targets
+                                 (if (or (memq 'models targets)
+                                         (memq 'client targets)
+                                         (memq 'controllers targets))
+                                     #t
+                                     #f)
+                                 (if (option-supplied? parsed 'no-models)
+                                     #f
+                                     (config-boolean
+                                      (config-ref config 'models #t) #t))))
+                    (readme? (if targets
+                                 (if (memq 'readme targets) #t #f)
+                                 (config-boolean
+                                  (config-ref config 'readme #t) #t)))
+                    (header-file (resolve-option parsed config
+                                                 'header-file #f))
+                    (header? (cond ((option-supplied? parsed 'no-header) #f)
+                                   ((option-supplied? parsed 'header-file) #t)
+                                   (else
+                                    (config-boolean
+                                     (config-ref config 'header #t) #t))))
+                    (header-text (or (read-file-text header-file)
+                                     (config-ref config 'header-text #f)))
+                    (dependencies
+                     (parse-dependencies
+                      (resolve-option parsed config
+                                      'dependencies "none"))))
                (unless input
                  (usage (current-error-port))
                  (error "--input is required"))
                (let ((written
                       (generate #:input input
                                 #:output output
-                                #:module (option-ref parsed 'module #f)
-                                #:controllers
-                                (parse-controllers
-                                 (option-ref parsed 'controllers "vanilla"))
-                                #:http (parse-backend
-                                        (option-ref parsed 'http "guile"))
-                                #:models? (not (option-ref parsed 'no-models #f))
-                                #:base-url (option-ref parsed 'base-url #f)
+                                #:module (resolve-option parsed config
+                                                         'module #f)
+                                #:controllers controllers
+                                #:http http
+                                #:models? models?
+                                #:readme? readme?
+                                #:base-url (resolve-option parsed config
+                                                           'base-url #f)
                                 #:self-contained?
-                                (option-ref parsed 'self-contained #f))))
+                                (if (option-supplied? parsed 'self-contained)
+                                    #t
+                                    (config-boolean
+                                     (config-ref config
+                                                 'self-contained #f)
+                                     #f))
+                                #:validate?
+                                (if (option-supplied? parsed 'no-validate)
+                                    #f
+                                    (config-boolean
+                                     (config-ref config 'validate #t) #t))
+                                #:model-suffix
+                                (or (resolve-option parsed config
+                                                    'model-suffix "")
+                                    "")
+                                #:operation-id-transform
+                                (resolve-option parsed config
+                                                'operation-id-transform #f)
+                                #:header? header?
+                                #:header-text header-text
+                                #:dependencies dependencies)))
                  (for-each (lambda (entry)
                              (format #t "~a: ~a~%" (car entry) (cdr entry)))
                            written)
                  0))))))
       (lambda (key . arguments)
-        (let ((message (false-if-exception (cadr arguments))))
-          (format (current-error-port)
-                  "openapi-generator: ~a~%"
-                  (or message key)))
+        (format (current-error-port)
+                "openapi-generator: ~a~%"
+                (exception-message key arguments))
         1))))

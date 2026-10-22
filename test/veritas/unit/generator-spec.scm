@@ -30,6 +30,8 @@
   #:use-module (srfi srfi-13)
   #:use-module (openapi-generator generator)
   #:use-module (openapi-generator reader)
+  #:use-module (openapi-generator config-file)
+  #:use-module (openapi-generator naming)
   #:use-module (openapi-generator cli)
   #:use-module (openapi-support)
   #:export (spec))
@@ -255,7 +257,211 @@ report is only useful for its keys and for the assertions made here."
                                      #:got (map car report)
                                      #:name "skipping validation still runs"))))))))
 
+(define (run-main arguments)
+  "Run the command line with @var{arguments}, with its report silenced."
+  (quiet (lambda () (main arguments))))
+
+(define configuration-suite
+  (suite "Configuration"
+         #:concurrent? #f
+
+         (test "A config file is read with normalised keys"
+               (let ((config (read-config-file
+                              (fixture "config/generator.yaml"))))
+                 (assert-equal #:expect "configured"
+                               #:got (config-ref config 'module #f))
+                 (assert-equal #:expect "Dto"
+                               #:got (config-ref config 'model-suffix #f))
+                 (assert-equal #:expect '(models readme)
+                               #:got (config-targets
+                                      (config-ref config 'targets #f)))
+                 (assert-equal #:expect 'guix
+                               #:got (string->symbol
+                                      (format #f "~a"
+                                              (config-ref config
+                                                          'dependencies
+                                                          #f))))))
+
+         (test "A JSON config file is read the same way"
+               (let ((config (read-config-file
+                              (fixture "config/generator.json"))))
+                 (assert-equal #:expect "json-configured"
+                               #:got (config-ref config 'module #f))
+                 (assert-equal #:expect "Json"
+                               #:got (config-ref config 'model-suffix #f))
+                 (assert-equal #:expect '(models)
+                               #:got (config-targets
+                                      (config-ref config 'targets #f)))
+                 (assert-false (config-ref config 'header #t))))
+
+         (test "The command line overrides the config file"
+               (with-temporary-directory "config-cli"
+                 (lambda (directory)
+                   (let ((status (run-main
+                                  (list "generate"
+                                        "--config"
+                                        (fixture "config/generator.yaml")
+                                        "--output" directory
+                                        "--module" "from-cli"))))
+                     (assert-eqv #:expect 0 #:got status)
+                     (assert-true (file-exists?
+                                   (join directory "from-cli/models.scm")))
+                     (assert-true (file-exists?
+                                   (join directory "dependencies.scm"))
+                                  #:name "the config file's guix dependencies are written")
+                     (assert-false (file-exists?
+                                    (join directory "configured/models.scm")))))))
+
+         (test "--targets selects the parts to write"
+               (with-temporary-directory "targets"
+                 (lambda (directory)
+                   (let ((status (run-main
+                                  (list "generate"
+                                        "--input" (fixture "petstore.yaml")
+                                        "--output" directory
+                                        "--targets" "models"))))
+                     (assert-eqv #:expect 0 #:got status)
+                     (assert-true (file-exists?
+                                   (join directory "petstore/models.scm")))
+                     (assert-false (file-exists?
+                                    (join directory "petstore/client.scm")))
+                     (assert-false (file-exists?
+                                    (join directory "petstore/controllers.scm")))
+                     (assert-false (file-exists?
+                                    (join directory "petstore/README.org")))))))
+
+         (test "A client target brings the models it needs"
+               (with-temporary-directory "targets-client"
+                 (lambda (directory)
+                   (let ((status (run-main
+                                  (list "generate"
+                                        "--input" (fixture "petstore.yaml")
+                                        "--output" directory
+                                        "--targets" "client"))))
+                     (assert-eqv #:expect 0 #:got status)
+                     (assert-true (file-exists?
+                                   (join directory "petstore/models.scm")))
+                     (assert-true (file-exists?
+                                   (join directory "petstore/client.scm")))
+                     (assert-false (file-exists?
+                                    (join directory "petstore/README.org")))))))
+
+         (test "An unknown target is an error"
+               (assert-eqv #:expect 1
+                           #:got (run-main
+                                  (list "generate"
+                                        "--input" (fixture "petstore.yaml")
+                                        "--output" "/tmp/never"
+                                        "--targets" "models,clients"))))
+
+         (test "--model-suffix renames the models"
+               (with-temporary-directory "suffix"
+                 (lambda (directory)
+                   (let ((status (run-main
+                                  (list "generate"
+                                        "--input" (fixture "mini.yaml")
+                                        "--output" directory
+                                        "--module" "suffixed"
+                                        "--model-suffix" "Dto"
+                                        "--targets" "models"))))
+                     (assert-eqv #:expect 0 #:got status)
+                     (let ((text (file-contents
+                                  (join directory "suffixed/models.scm"))))
+                       (assert-true (contains? text
+                                               "(define-record-type <thing-dto>"))
+                       (assert-true (contains? text "(define* (make-thing-dto")))))))
+
+         (test "--operation-id-transform renames the procedures"
+               (with-temporary-directory "transform"
+                 (lambda (directory)
+                   (let ((status (run-main
+                                  (list "generate"
+                                        "--input" (fixture "petstore.yaml")
+                                        "--output" directory
+                                        "--module" "renamed"
+                                        "--operation-id-transform"
+                                        "getPetById:fetch-pet"
+                                        "--targets" "models,client"))))
+                     (assert-eqv #:expect 0 #:got status)
+                     (let ((text (file-contents
+                                  (join directory "renamed/client.scm"))))
+                       (assert-true (contains? text "(define* (fetch-pet"))
+                       (assert-false (contains? text "(define* (get-pet-by-id")))))))
+
+         (test "A replacement template can refer to a capture group"
+               (assert-equal #:expect "v2-pets"
+                             #:got ((parse-operation-id-transform
+                                     "^V2_(.*)$:v2-\\1")
+                                    "V2_pets"))
+               (assert-equal #:expect "create-pet"
+                             #:got ((parse-operation-id-transform
+                                     "^create_(.*)$:create-\\1")
+                                    "create_pet")))
+
+         (test "--no-validate skips the OpenAPI check"
+               (with-temporary-directory "novalidate"
+                 (lambda (directory)
+                   (assert-eqv #:expect 1
+                               #:got (run-main
+                                      (list "generate"
+                                            "--input" (fixture "swagger2.yaml")
+                                            "--output" directory
+                                            "--targets" "readme")))
+                   (assert-eqv #:expect 0
+                               #:got (run-main
+                                      (list "generate"
+                                            "--input" (fixture "swagger2.yaml")
+                                            "--output" directory
+                                            "--targets" "readme"
+                                            "--no-validate"))))))
+
+         (test "--no-header omits the banner and --header-file adds a paragraph"
+               (with-temporary-directory "header"
+                 (lambda (directory)
+                   (let ((status (run-main
+                                  (list "generate"
+                                        "--input" (fixture "mini.yaml")
+                                        "--output" directory
+                                        "--module" "plain"
+                                        "--targets" "models"
+                                        "--no-header"))))
+                     (assert-eqv #:expect 0 #:got status)
+                     (assert-false
+                      (contains? (file-contents
+                                  (join directory "plain/models.scm"))
+                                 "Generated by guile-openapi-generator")))
+                   (let ((status (run-main
+                                  (list "generate"
+                                        "--input" (fixture "mini.yaml")
+                                        "--output" directory
+                                        "--module" "licensed"
+                                        "--targets" "models"
+                                        "--header-file"
+                                        (fixture "config/header.txt")))))
+                     (assert-eqv #:expect 0 #:got status)
+                     (assert-true
+                      (contains? (file-contents
+                                  (join directory "licensed/models.scm"))
+                                 "SPDX-License-Identifier"))))))
+
+         (test "--dependencies guix writes a manifest"
+               (with-temporary-directory "deps"
+                 (lambda (directory)
+                   (let ((status (run-main
+                                  (list "generate"
+                                        "--input" (fixture "petstore.yaml")
+                                        "--output" directory
+                                        "--targets" "models"
+                                        "--dependencies" "guix"))))
+                     (assert-eqv #:expect 0 #:got status)
+                     (assert-true (file-exists?
+                                   (join directory "dependencies.scm")))
+                     (assert-true
+                      (contains? (file-contents
+                                  (join directory "dependencies.scm"))
+                                 "guile-json"))))))))
+
 (define (spec)
   (veritas-run #:concurrent? #f
                report-suite self-contained-suite cli-suite version-suite
-               validation-suite))
+               validation-suite configuration-suite))
