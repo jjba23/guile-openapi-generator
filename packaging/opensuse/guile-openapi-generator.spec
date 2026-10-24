@@ -20,7 +20,7 @@
 %global debug_package %{nil}
 
 Name:           guile-openapi-generator
-Version:        0.0.7
+Version:        0.0.10
 Release:        0
 Summary:        OpenAPI 3 to Guile Scheme code generator
 License:        AGPL-3.0-or-later

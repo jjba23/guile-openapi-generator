@@ -62,11 +62,13 @@
 
 ;; ====== Maak file helpers ======
 
+;; The code the generator runs under `guile -c' is one shell word, so it keeps
+;; its single quotes inside the token while its own arguments stay separate.
 (define (guile-run . code)
   "Runs CODE, a list of forms as a single string, with src/ and test/ loaded."
-  (time-machine-manifest-shell (list "guile -L ./src -L ./test"
-                                     (~ "-c '~a'"
-                                        (apply string-append code)))))
+  (time-machine-manifest-shell
+   (list "guile" "-L" "./src" "-L" "./test"
+         "-c" (~ "'~a'" (apply string-append code)))))
 
 ;; ====== Maak file tasks ======
 
@@ -81,28 +83,32 @@ The trees the test suite generates under test/generated and the fixture programs
 in test/fixtures/programs are skipped: they are output or fragments, and they
 only make sense with a generated tree on the load path.
 
-The load path is exported for the whole pipeline, not just for `find`: an
-assignment in front of a pipeline applies to that one command, so `guild compile`
-would otherwise run without src/ and test/ on its path."
+The load path is exported in the shell line rather than put in front of `find':
+an assignment in front of a pipeline applies to that one command, so `guild
+compile' would otherwise run without src/ and test/ on its path."
+  ;; A shell is what this needs: an `export' that outlives the first command,
+  ;; and a `find -print0 | xargs -0' pair.  Every part below is one shell word,
+  ;; quoted where the shell must keep it one.
   (time-machine-manifest-shell
-   (list (string-append
-          "export GUILE_LOAD_PATH=./src:./test:$GUILE_LOAD_PATH; "
-          "find src test -name '*.scm' "
-          "-not -path 'test/generated/*' "
-          "-not -path 'test/fixtures/programs/*' -print0 "
-          "| xargs -0 -n 1 guild compile "
-          "-o \"${TMPDIR:-/tmp}/guile-openapi-generator-check.go\""))))
+   (list "export" "GUILE_LOAD_PATH=./src:./test:$GUILE_LOAD_PATH;"
+         "find" "src" "test" "-name" "'*.scm'"
+         "-not" "-path" "'test/generated/*'"
+         "-not" "-path" "'test/fixtures/programs/*'"
+         "-print0"
+         "|"
+         "xargs" "-0" "-n" "1" "guild" "compile"
+         "-o" (shell-quote
+               (~ "~a/guile-openapi-generator-check.go" (tmp-dir))))
+   #:verbose? #t))
 
 (define (generate)
   "Generate a client, controllers and models from the example specification."
   (delete-file-recursively example-output)
   (mkdir-p example-output)
   (time-machine-manifest-shell
-   (list (~ "guile -L ./src -c '((@ (openapi-generator cli) main!) (list"
-            " \"generate\" \"--input\" \"~a\" \"--output\" \"~a\""
-            " \"--module\" \"petstore\" \"--controllers\" \"artanis\""
-            " \"--http\" \"curl\"))'"
-            example-spec example-output))))
+   (list "guile" "-L" "./src"
+         "-c" (~ "'((@ (openapi-generator cli) main!) (list \"generate\" \"--input\" \"~a\" \"--output\" \"~a\" \"--module\" \"petstore\" \"--controllers\" \"artanis\" \"--http\" \"curl\"))'"
+                 example-spec example-output))))
 
 (define (fmt)
   "Format Scheme source code files according to the Guix style guide."
@@ -113,33 +119,38 @@ would otherwise run without src/ and test/ on its path."
 (define (docs)
   "Generate technical API documentation."
   (delete-file-recursively "doc")
-  (time-machine-manifest-shell (list (~ "documenta api ./src/~a" project-name)
-                                    (~ "texi2any -v --html --css-ref=~a -o index_html"
-                                       api-docs-css-url)
-                                    "./doc/api/index.texi"))
+  ;; Documenta writes ./doc/api/index.texi, and texi2any turns that into the
+  ;; HTML tree; two calls, so a failure names the step that failed.
+  (time-machine-manifest-shell (list "documenta" "api"
+                                     (~ "./src/~a" project-name)))
+  (time-machine-manifest-shell
+   (list "texi2any" "-v" "--html"
+         (~ "--css-ref=~a" api-docs-css-url)
+         "-o" "index_html" "./doc/api/index.texi"))
   (mv "./index_html" "./doc/api-dist"))
 
 (define (deploy)
   "Generate the API documentation and publish it to the web directory."
   (docs)
   (remkdir-p (~ "~a/api-docs/~a" deploy-api-docs-dir project-name))
-  (mv "doc/api-dist/*" (~ "~a/api-docs/~a" deploy-api-docs-dir project-name))
+  (mv "doc/api-dist/*" (~ "~a/api-docs/~a" deploy-api-docs-dir project-name)
+      #:expand? #t)
   (delete-file-recursively "doc"))
 
 (define (repl)
   "Development REPL with src/ and test/ on the load path."
-  (time-machine-manifest-shell '("guile -L ./src -L ./test")))
+  (time-machine-manifest-shell (list "guile" "-L" "./src" "-L" "./test")))
 
 (define (hot-reload)
   "Re-run the test suite whenever a source, fixture or spec file changes."
+  ;; `maak test' is one word to watchexec, so it stays quoted inside its token.
   (time-machine-manifest-shell
-   (list "watchexec 'maak test'"
+   (list "watchexec" "'maak test'"
          "--clear"
-         (~ "--exts ~a"
-            (string-join (map symbol->string hot-reload-file-types) ","))
+         "--exts" (string-join (map symbol->string hot-reload-file-types) ",")
          "--on-busy-update=restart"
-         "--shell bash"
-         "--watch .")))
+         "--shell" "bash"
+         "--watch" ".")))
 
 (define (hr)
   "Alias to hot-reloading."
