@@ -1,0 +1,52 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+
+GUILE_VER = 3.0
+SITE_DIR = debian/guile-openapi-generator/usr/share/guile/site/$(GUILE_VER)
+BUILD_SITE = build/site
+BUILD_CCACHE = build/ccache
+# Debian's site-ccache lives in the multiarch libdir; ask Guile's
+# pkg-config file instead of hard-coding a path that would be wrong
+# on the next architecture.
+CCACHE_DIR = $(shell pkg-config --variable=siteccachedir guile-3.0)
+
+%:
+	dh $@
+
+# Guile's .go files are ELF objects whose debug sections dwz does
+# not understand; there is no separate debug binary to compress.
+override_dh_dwz:
+
+override_dh_auto_configure:
+	# Nothing to configure: Scheme sources plus (for applications) a
+	# bash launcher, installed by hand below.
+
+override_dh_auto_build:
+	mkdir -p $(BUILD_SITE)/openapi-generator $(BUILD_CCACHE)/openapi-generator
+	cp -r src/openapi-generator/. $(BUILD_SITE)/openapi-generator/
+	cp src/openapi-generator.scm $(BUILD_SITE)/
+
+	# Byte-compile every module so that loading it does not compile it
+	# again on first use.
+	find $(BUILD_SITE)/openapi-generator -name '*.scm' | while read -r scm_file; do \
+		rel_path="$${scm_file#$(BUILD_SITE)/}"; \
+		go_file="$(BUILD_CCACHE)/$${rel_path%.scm}.go"; \
+		mkdir -p "$$(dirname "$$go_file")"; \
+		guild compile -L $(BUILD_SITE) -o "$$go_file" "$$scm_file"; \
+	done
+
+override_dh_auto_test:
+	VERITAS_TEST_TYPE=unit VERITAS_RUN_BENCHMARKS=false guile -L ./src -L ./test -c '((@ (veritas runner) run-tests))'
+
+override_dh_auto_install:
+
+	# Scheme sources and their byte-compiled copies.
+	mkdir -p $(SITE_DIR) debian/guile-openapi-generator$(CCACHE_DIR)
+	cp -r $(BUILD_SITE)/openapi-generator $(SITE_DIR)/
+	cp $(BUILD_SITE)/openapi-generator.scm $(SITE_DIR)/
+	cp -r $(BUILD_CCACHE)/openapi-generator debian/guile-openapi-generator$(CCACHE_DIR)/
+
+override_dh_auto_clean:
+	rm -rf build
+	dh_auto_clean

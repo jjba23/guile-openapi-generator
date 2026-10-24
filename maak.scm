@@ -29,7 +29,10 @@
             hr
             dev
             clean
-            default))
+            default
+            container-build
+            container-run
+            package-docker))
 
 ;; ====== Maak file constants ======
 
@@ -150,3 +153,17 @@ would otherwise run without src/ and test/ on its path."
 (define (default)
   "Default task to be run, list available tasks."
   ($ '("maak --list")))
+
+;; ====== Container tasks ======
+
+(define (container-build)
+  "Build the container image for guile-openapi-generator."
+  ($ '("podman build -t guile-openapi-generator .")))
+
+(define (container-run)
+  "Run the container image for guile-openapi-generator."
+  ($ '("podman run --rm -it guile-openapi-generator:latest")))
+
+(define (package-docker)
+  "Build the container image for guile-openapi-generator."
+  (container-build))

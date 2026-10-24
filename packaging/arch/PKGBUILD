@@ -1,0 +1,96 @@
+# guile-openapi-generator
+
+# Copyright © 2026 Josep Bigorra <jjbigorra@gmail.com>
+
+# guile-openapi-generator is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Affero General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+#
+# guile-openapi-generator is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
+# for more details.
+#
+# You should have received a copy of the GNU Affero General Public License along
+# with guile-openapi-generator. If not, see <https://www.gnu.org/licenses/>.
+
+# Maintainer: Josep Bigorra <jjbigorra@gmail.com>
+pkgname=guile-openapi-generator
+pkgver=0.0.7
+pkgrel=1
+pkgdesc="OpenAPI 3 to Guile Scheme code generator"
+arch=('any')
+url="https://codeberg.org/jjba23/guile-openapi-generator"
+license=('AGPL-3.0-or-later')
+
+depends=(
+  'guile'
+  'guile-json'
+)
+
+makedepends=(
+  'guile'
+  'pkgconf'
+)
+
+checkdepends=(
+  'veritas'
+)
+
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('3249e9af5ad3522b22edd659719875a64a068560dde07255646a5fc7b26eb242')
+
+# veritas is produced by the same packaging batch; build it first.
+
+# Guile looks for byte-compiled modules under the site-ccache directory,
+# which differs between distributions, so ask Guile's pkg-config file
+# instead of hard-coding a path.
+_site_dir() {
+  pkg-config --variable=sitedir guile-3.0 2>/dev/null \
+    || echo /usr/share/guile/site/3.0
+}
+
+_compiled_dir() {
+  pkg-config --variable=siteccachedir guile-3.0 2>/dev/null \
+    || echo /usr/lib/guile/3.0/site-ccache
+}
+
+build() {
+  cd "$srcdir/guile-openapi-generator"
+
+  # Byte-compile every module, mirroring the source tree under a staging
+  # directory that package() copies into the compiled site directory.
+  rm -rf "$srcdir/ccache"
+  mkdir -p "$srcdir/ccache/openapi-generator"
+
+  while IFS= read -r scm_file; do
+    rel_path="${scm_file#src/}"
+    go_file="$srcdir/ccache/${rel_path%.scm}.go"
+    mkdir -p "$(dirname "$go_file")"
+    guild compile -L src -o "$go_file" "$scm_file"
+  done < <(find src/openapi-generator -name '*.scm')
+}
+
+check() {
+  cd "$srcdir/guile-openapi-generator"
+
+  VERITAS_TEST_TYPE=unit VERITAS_RUN_BENCHMARKS=false guile -L ./src -L ./test -c '((@ (veritas runner) run-tests))'
+}
+
+package() {
+  cd "$srcdir/guile-openapi-generator"
+
+
+  site_dir="$(_site_dir)"
+  install -d "$pkgdir${site_dir}/openapi-generator"
+  cp -r src/openapi-generator/. "$pkgdir${site_dir}/openapi-generator/"
+  install -m644 src/openapi-generator.scm "$pkgdir${site_dir}/"
+
+  ccache_dir="$(_compiled_dir)"
+  install -d "$pkgdir${ccache_dir}/openapi-generator"
+  cp -r "$srcdir/ccache/openapi-generator/." "$pkgdir${ccache_dir}/openapi-generator/"
+
+  install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+  install -Dm644 README.org "$pkgdir/usr/share/doc/$pkgname/README.org"
+}
