@@ -18,6 +18,9 @@
 (define-module (maak)
   #:declarative? #t
   #:use-module (maak maak)
+  ;; The container helpers are imported under a prefix because the tasks
+  ;; below are named the way maak exposes them on the command line.
+  #:use-module ((maak container) #:prefix ct:)
   #:export (test
             check
             generate
@@ -103,7 +106,9 @@ would otherwise run without src/ and test/ on its path."
 
 (define (fmt)
   "Format Scheme source code files according to the Guix style guide."
-  ($ '("find . -maxdepth 8 -name '*.scm'" "-type f -exec guix style -f {} \\;")))
+  (run (list "find" "." "-maxdepth" "8" "-name" "*.scm" "-type" "f"
+             "-exec" "guix" "style" "-f" "{}" ";")
+       #:verbose? #t))
 
 (define (docs)
   "Generate technical API documentation."
@@ -152,17 +157,17 @@ would otherwise run without src/ and test/ on its path."
 
 (define (default)
   "Default task to be run, list available tasks."
-  ($ '("maak --list")))
+  (list-tasks))
 
 ;; ====== Container tasks ======
 
 (define (container-build)
   "Build the container image for guile-openapi-generator."
-  ($ '("podman build -t guile-openapi-generator .")))
+  (ct:container-build "." #:tag "guile-openapi-generator:latest" #:verbose? #t))
 
 (define (container-run)
   "Run the container image for guile-openapi-generator."
-  ($ '("podman run --rm -it guile-openapi-generator:latest")))
+  (ct:container-run "guile-openapi-generator" #:interactive? #t #:tty? #t #:verbose? #t))
 
 (define (package-docker)
   "Build the container image for guile-openapi-generator."
