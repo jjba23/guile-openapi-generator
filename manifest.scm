@@ -43,7 +43,7 @@
     ;; body was evaluated while the spec file was loaded, so any body that had
     ;; to start something (the test HTTP server, for instance) ran before the
     ;; runner was in charge and hung the whole suite.
-    (version "0.8.0")
+    (version "0.9.0")
     (source
      (origin
        (method git-fetch)
@@ -53,7 +53,7 @@
        (file-name (git-file-name name version))
        (sha256
         (base32
-         "1cpc4cnm5aac8528s8b5wslcbxq0kdf7ya9y5rm6alv1h154pj47"))))
+         "1pr8yjnxkrp2fylmn8ihjapin7iz94jqi4hbc6yd0ajll11ajxc9"))))
     (build-system guile-build-system)
     (arguments
      (list
