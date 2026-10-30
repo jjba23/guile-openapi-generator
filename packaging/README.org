@@ -1,0 +1,278 @@
+#+TITLE: Packaging guile-openapi-generator
+#+OPTIONS: toc:2
+
+How this project is packaged for Arch, Debian, openSUSE and a container, what
+the four have in common, and how to prove a recipe before it is published.  The
+recipes are in this directory; the container is the ~Dockerfile~ at the root of
+the repository.
+
+* One installation, four recipes
+
+A package is the same five things everywhere.  Instead of writing that layout
+four times, it is written once, in =scripts/install-tree=, and every recipe runs
+that script:
+
+| Recipe                  | How it installs                                                |
+|-------------------------+----------------------------------------------------------------|
+| =arch/PKGBUILD=          | =sh scripts/install-tree --destdir "$pkgdir" --site-dir … =      |
+| =debian/rules=           | =sh scripts/install-tree --destdir build/root=, then one =cp=   |
+| =opensuse/*.spec=        | =sh scripts/install-tree --destdir %{buildroot}=                |
+| =Dockerfile=             | =sh scripts/install-tree --destdir /tmp/root=, then =COPY=      |
+
+What it installs:
+
+| Path                                             | What                                    |
+|--------------------------------------------------+-----------------------------------------|
+| =$prefix/bin/guile-openapi-generator=             | the launcher (=scripts/=)                |
+| =$prefix/share/man/man1/guile-openapi-generator.1= | the manual page (=man/=)                |
+| =$site_dir/openapi-generator.scm=                  | the public module, =(openapi-generator)= |
+| =$site_dir/openapi-generator/*.scm=                | the rest of the library                  |
+| =$ccache_dir/openapi-generator/*.go=               | the byte-compiled copies                 |
+| =$ccache_dir/openapi-generator.go=                 | the compiled public module               |
+
+~site_dir~ and ~ccache_dir~ are *asked of Guile* rather than hard-coded: the
+compiled-module directory moves with the distribution and with the architecture
+(Debian's =/usr/lib/x86_64-linux-gnu/guile/3.0/site-ccache= against openSUSE's
+=/usr/lib64/guile/3.0/site-ccache= and Arch's =/usr/lib/guile/3.0/site-ccache=),
+and a package that guesses installs modules that are either not found or
+compiled again on every first use.  The installer asks ~pkg-config --variable
+sitedir guile-3.0~ first, because that is what a distribution build has, and
+falls back to ~guile -c '(display (%site-dir))'~.
+
+The installer stops when a module has no byte-compiled copy: it compiles from
+=src/=, compares the count under the cache directory with the count of sources,
+and fails on a mismatch.  That check is the reason a package cannot quietly ship
+a half-filled cache.
+
+Licences and README files are *not* the installer's business: they belong to
+whatever the packaging layer calls documentation (=%license= and =%doc=,
+=dh_installdocs=, or the two =install= lines in the container).  That is why the
+same installer serves a Debian package, an RPM and an image without any
+"skip the docs" flag.
+
+#+begin_src shell
+# The whole installer, into a scratch root:
+sh scripts/install-tree --destdir /tmp/root
+
+# A package, into its own root, with the directories this distribution uses:
+sh scripts/install-tree --destdir "$pkgdir" --prefix /usr
+#+end_src
+
+Options: ~--destdir~ (or ~DESTDIR~), ~--prefix~ (default =/usr~), ~--site-dir~,
+~--ccache-dir~, ~--no-compile~, ~--help~.  A prefix other than =/usr= gets a
+layout under that prefix (=$prefix/share/guile/site/3.0=), because the launcher
+looks for the library beside its own prefix and would not find one installed
+under =/usr=.
+
+* The launcher
+
+=scripts/guile-openapi-generator= resolves its own prefix rather than trusting
+an environment variable: from =/usr/bin= it looks in
+=/usr/share/guile/site/3.0=, and from a checkout's =scripts/= it looks in =src/=.
+That is why the package installs it into =%{_bindir}= next to the library
+instead of shipping a wrapper with a path baked in, and why a tree that was
+moved somewhere else can say where the library is with
+~GUILE_OPENAPI_GENERATOR_LIBDIR~.
+
+* Versions
+
+The version string is in one place in the sources, =generator-version= in
+=src/openapi-generator/generator.scm=, and it is what the command prints.  The
+recipes pin the release tag built from that same tree, so the recipe and the
+sources it builds are versioned together:
+
+| Recipe                    | Where the version lives                     |
+|---------------------------+---------------------------------------------|
+| =arch/PKGBUILD=           | =pkgver=                                    |
+| =debian/changelog=        | the topmost entry                           |
+| =opensuse/*.spec=         | =Version:= (the OBS service rewrites it)    |
+| =Dockerfile=              | =VERSION= build argument, =dev= by default  |
+| =maak package-*=          | read from =generator-version=, not the tag  |
+
+The container is the one that checks: with ~--build-arg VERSION=X.Y.Z~ the build
+compares the label against ~guile-openapi-generator --version~ and fails when
+they disagree, so an image tagged =X.Y.Z= cannot hold different code.
+
+The Arch source is the release tarball, and a tarball has no checksum before it
+exists: the recipe is committed with =sha256sums=('SKIP')= and the checksum is
+filled in by running =updpkgsums= in =arch/= once the tag is published.  The
+other two recipes are updated by the release itself — =debian/changelog= gains an
+entry, the openSUSE service takes the version from the tag, and
+=debian/watch= tells =uscan= where the tags are.
+
+* What each recipe proves
+
+All four run the project's own suite, with the environment the runner expects:
+
+#+begin_src shell
+VERITAS_TEST_MODULE=veritas VERITAS_TEST_TOP_DIR=test \
+VERITAS_TEST_TYPE=unit VERITAS_RUN_BENCHMARKS=false \
+guile -L ./src -L ./test -c '(exit ((@ (veritas runner) run-tests)))'
+#+end_src
+
+That needs Veritas, which the distributions do not carry; the recipes assume it
+is built from the same packaging batch and installed first (the Debian control
+file and the openSUSE spec say so where they list it).  =guile-curl= is *not* a
+requirement: the libcurl transport is generated code that imports it, so its
+end-to-end test skips itself when the module is absent, and the package either
+pulls it in as a check dependency (Arch, Debian) or recommends it (openSUSE).
+
+Installation is a second thing to prove, and it is proved after the fact: the
+Debian package carries two autopkgtests, one that drives the installed command
+in both directions and one that checks the layout itself — every module has a
+compiled copy in the directory the installed Guile reads, and the library loads
+with ~GUILE_AUTO_COMPILE=0~, so a cache installed in the wrong place fails
+instead of being rebuilt in =$HOME=.
+
+* Arch
+
+#+begin_src shell
+cd packaging/arch
+updpkgsums        # once, after the tag is published
+makepkg -si
+#+end_src
+
+=checkdepends= lists ~veritas~ and ~guile-curl~; ~artanis~ and ~guile-curl~ are
+optional dependencies of the installed package, because a generated client or
+server may use either and the generator itself needs neither.  On a machine that
+is not Arch, build the package in an Arch container:
+
+#+begin_src shell
+podman run --rm -v "$PWD:/src" -w /src/packaging/arch archlinux:base-devel \
+    bash -lc 'pacman -Sy --noconfirm --needed base-devel guile guile-json pkgconf &&
+              useradd -m builder && chown -R builder /src &&
+              su builder -c "makepkg --nodeps --force --cleanbuild"'
+#+end_src
+
+=--nodeps= is what keeps the container from needing the AUR packages the recipe
+lists under =checkdepends=; drop it on a real Arch host to run the suite.
+
+* Debian
+
+#+begin_src shell
+cp -r packaging/debian .
+dpkg-buildpackage -us -uc -b
+#+end_src
+
+~debian/rules~ stages the installation with the shared installer in
+~override_dh_auto_build~ and copies that tree into the package in
+~override_dh_auto_install~, so the recipe holds no layout of its own.  The suite
+runs in ~override_dh_auto_test~, and the libcurl test skips itself when
+~guile-curl~ was not installed.
+
+~debian/tests/= holds the autopkgtests that run *after* installation, in a
+container that holds nothing but the package and its dependencies:
+
+#+begin_src shell
+autopkgtest . -- null
+#+end_src
+
+~command-line~ asks the installed command for its version and help, generates a
+tree from a tiny specification, loads that tree, recovers a specification from a
+couple of routes, and checks that a missing input is an error rather than a
+backtrace.  ~installed-files~ checks the layout and the byte-compiled cache, with
+~GUILE_AUTO_COMPILE=0~ so that a missing cache cannot be papered over.  Those are
+the only checks that can see a package whose files landed in the wrong place.
+
+=maak package-deb= does the first two lines for you: it symlinks
+=packaging/debian= to =debian/= for the length of the build, runs
+~debuild -b -uc -us~, and removes the link.
+
+* openSUSE
+
+The package is built with the Open Source Build Service; =opensuse/_service=
+regenerates the tarball from each tag and rewrites =Version:= to match, so the
+spec file is the only thing to keep in step by hand.
+
+#+begin_src shell
+osc checkout home:jjbigorra/guile-openapi-generator
+cp packaging/opensuse/* .          # the spec and _service
+osc addremove && osc commit
+#+end_src
+
+The spec builds no binary — there is nothing to compile — so it disables the
+empty debug package.  ~%install~ runs the shared installer, which byte-compiles
+the sources into the directory Guile reports (=%{_libdir}= here), and ~%check~
+runs the same suite as the other three.  A local build, with the spec in place,
+is ~osc build --clean~; =maak package-rpm= is the rpmbuild equivalent for
+openSUSE and Fedora/RHEL hosts.
+
+* Container
+
+#+begin_src shell
+podman build -t guile-openapi-generator .
+podman run --rm -v "$PWD:/work" guile-openapi-generator \
+    generate -i openapi.yaml -o gen -m petstore
+podman run --rm -v "$PWD:/work" guile-openapi-generator \
+    spec -i app/controllers.scm -o openapi.yaml
+#+end_src
+
+The image is built in two stages: one installs Guile and guile-json, runs
+=scripts/install-tree= into a staging root exactly as the recipes do, adds the
+licence and README, and smoke-tests that tree — a specification into modules,
+routes back into a specification — and the second copies it into a clean
+Tumbleweed with the runtime dependencies only.  The entry point is the launcher,
+the working directory is =/work= so a bind mount is all a run needs, and the
+diagnostics on the finished image list the command, the manual page, the
+version, both help screens, the number of compiled modules, and load the whole
+library with ~GUILE_AUTO_COMPILE=0~ to prove that the compiled copies are the
+ones Guile reads.
+
+#+begin_src shell
+# A release image, with the version checked against the code it holds:
+podman build --build-arg VERSION=0.1.0 -t guile-openapi-generator:0.1.0 .
+#+end_src
+
+=maak package-docker= builds exactly that, tags it =:latest= as well, and is
+what a release runs.
+
+A container is the one place where the image's own files are all that exist, so
+it is also the cheapest reproduction of a packaging bug: if a report says a
+package cannot find its modules, run the same command in this image first.
+
+* Checking the recipes without a distribution
+
+Two of the checks above need their distribution's tools, but the part every
+recipe shares can be run anywhere, and is what =maak package-smoke= does:
+
+#+begin_src shell
+maak package-smoke     # install-tree into dist/root, then both commands
+maak package-tar       # dist/guile-openapi-generator-VERSION.tar.gz
+maak package-docker    # the image, versioned and checked
+#+end_src
+
+The smoke task runs the installer and then the staged launcher: version, both
+help screens, a generated tree from =examples/petstore.yaml=, and a specification
+recovered from a route table.  Because it exercises the same script the recipes
+call, a layout bug shows up on any machine instead of only inside a build
+chroot.
+
+| Recipe  | Needs                          | Proves                                   |
+|---------+--------------------------------+------------------------------------------|
+| Arch    | =makepkg=, =veritas=            | =check()=, the launcher after install     |
+| Debian  | =debhelper=, =devscripts=       | =dh_auto_test=, two autopkgtests          |
+| openSUSE| =rpmbuild= or =osc=             | =%check=, the file list                   |
+| Docker  | =podman= or =docker=            | staged smoke test, cache, version label   |
+| any     | Guile and guile-json            | =maak package-smoke= (the shared installer)|
+
+* Releasing
+
+1. Set =generator-version= and add the changelog entry for the release.
+2. Commit, tag =vX.Y.Z=, push the tag.
+3. Run =maak package-smoke= and =maak package-tar= from the tag.
+4. Run =updpkgsums= in =packaging/arch= and commit the checksum.
+5. Update the spec's =Version:= if the service will not (it will).
+6. Build the image from the tag: =maak package-docker=.
+7. Run =autopkgtest= and ~makepkg --check~ from a clean tree before submitting.
+
+* Known limits
+
+- None of the three distributions carries guile-openapi-generator yet, and none
+  of them carries =veritas= either, so the recipes' checks assume the test
+  runner is built from the same packaging batch and installed first.
+- The Arch recipe ships with =sha256sums=('SKIP')= until the tag it names
+  exists; =updpkgsums= fills it in, and a submission should never carry =SKIP=.
+- The container image is built for the architecture it is built on.  A
+  multi-architecture image would need one build per platform with the same
+  script, which is why the layout lives in a shell script and not in the
+  Dockerfile.

@@ -2,14 +2,11 @@
 
 export DH_VERBOSE = 1
 
-GUILE_VER = 3.0
-SITE_DIR = debian/guile-openapi-generator/usr/share/guile/site/$(GUILE_VER)
-BUILD_SITE = build/site
-BUILD_CCACHE = build/ccache
-# Debian's site-ccache lives in the multiarch libdir; ask Guile's
-# pkg-config file instead of hard-coding a path that would be wrong
-# on the next architecture.
-CCACHE_DIR = $(shell pkg-config --variable=siteccachedir guile-3.0)
+# The installed layout is described once, in scripts/install-tree, and every
+# recipe here runs that script instead of repeating it.  Debian's site-ccache
+# lives in the multiarch libdir, which is one of the reasons the script asks
+# Guile for the directory rather than taking a path from the recipe.
+STAGE = build/root
 
 %:
 	dh $@
@@ -19,33 +16,27 @@ CCACHE_DIR = $(shell pkg-config --variable=siteccachedir guile-3.0)
 override_dh_dwz:
 
 override_dh_auto_configure:
-	# Nothing to configure: Scheme sources plus (for applications) a
-	# bash launcher, installed by hand below.
+	# Nothing to configure: Scheme sources plus a bash launcher.
 
+# The build stage produces the tree the package will hold: the launcher, the
+# manual page, the modules and their byte-compiled copies, all at the paths
+# Guile reports for this distribution and architecture.  It is also what
+# `maak package-smoke' installs into a scratch root, so a wrong layout fails
+# before a package is uploaded rather than after it is installed.
 override_dh_auto_build:
-	mkdir -p $(BUILD_SITE)/openapi-generator $(BUILD_CCACHE)/openapi-generator
-	cp -r src/openapi-generator/. $(BUILD_SITE)/openapi-generator/
-	cp src/openapi-generator.scm $(BUILD_SITE)/
-
-	# Byte-compile every module so that loading it does not compile it
-	# again on first use.
-	find $(BUILD_SITE)/openapi-generator -name '*.scm' | while read -r scm_file; do \
-		rel_path="$${scm_file#$(BUILD_SITE)/}"; \
-		go_file="$(BUILD_CCACHE)/$${rel_path%.scm}.go"; \
-		mkdir -p "$$(dirname "$$go_file")"; \
-		guild compile -L $(BUILD_SITE) -o "$$go_file" "$$scm_file"; \
-	done
+	sh scripts/install-tree --destdir $(STAGE) --prefix /usr
 
 override_dh_auto_test:
-	VERITAS_TEST_TYPE=unit VERITAS_RUN_BENCHMARKS=false guile -L ./src -L ./test -c '((@ (veritas runner) run-tests))'
+	# The libcurl transport test skips itself when guile-curl is not
+	# installed, so the build does not depend on an optional transport.
+	VERITAS_TEST_MODULE=veritas \
+	VERITAS_TEST_TOP_DIR=test \
+	VERITAS_TEST_TYPE=unit \
+	VERITAS_RUN_BENCHMARKS=false \
+	guile -L ./src -L ./test -c '(exit ((@ (veritas runner) run-tests)))'
 
 override_dh_auto_install:
-
-	# Scheme sources and their byte-compiled copies.
-	mkdir -p $(SITE_DIR) debian/guile-openapi-generator$(CCACHE_DIR)
-	cp -r $(BUILD_SITE)/openapi-generator $(SITE_DIR)/
-	cp $(BUILD_SITE)/openapi-generator.scm $(SITE_DIR)/
-	cp -r $(BUILD_CCACHE)/openapi-generator debian/guile-openapi-generator$(CCACHE_DIR)/
+	cp -a $(STAGE)/. debian/guile-openapi-generator/
 
 override_dh_auto_clean:
 	rm -rf build

@@ -1,0 +1,313 @@
+.TH GUILE\-OPENAPI\-GENERATOR 1 "2026-10-31" "guile-openapi-generator" "User Commands"
+.SH NAME
+guile\-openapi\-generator \- generate Guile Scheme from an OpenAPI document, and an OpenAPI document from Guile routes
+.SH SYNOPSIS
+.B guile\-openapi\-generator
+.RB [ generate ]
+.B \-i
+.I SPEC
+.B \-o
+.I DIR
+.RI [ options ]
+.br
+.B guile\-openapi\-generator
+.B spec
+.B \-i
+.I ROUTES
+.B \-o
+.I FILE
+.RI [ options ]
+.SH DESCRIPTION
+.B guile\-openapi\-generator
+reads an OpenAPI 3.x document written in YAML or JSON and writes Guile Scheme
+that reads like a person wrote it: records that validate themselves, a
+controller with a route table and a dispatcher, and an HTTP client whose
+procedures take and return records rather than strings.
+.PP
+The same idea runs backwards as well.  The
+.B spec
+command reads the routes of a Guile or Artanis server that already exists and
+writes the OpenAPI 3.0 document it never had, which can then be refined by
+hand or fed to the
+.B generate
+command.
+.PP
+The command word may be left out: an invocation that starts with an option
+means
+.BR generate ,
+because that was the only command the tool had for a while.
+.SH COMMANDS
+.TP
+.B generate
+Read a specification and write a tree of Guile modules: models, controllers,
+a client and a README, according to the options below.
+.TP
+.B spec
+Read the route declarations of a Guile or Artanis source file and write an
+OpenAPI 3.0 document in YAML.  Neither file is loaded and no handler runs; the
+source is read as data.
+.SH OPTIONS FOR GENERATE
+.TP
+.BI \-\-input " SPEC" "\fR, \fB\-i " SPEC
+The OpenAPI document to read: a path, or an http(s) URL.  One of this and
+.B \-\-json\-schema\-file
+is required.
+.TP
+.BI \-\-output " DIR" "\fR, \fB\-o " DIR
+The directory to write the generated tree to.  Default: \fIgenerated\fP.
+.TP
+.BI \-\-module " NAME" "\fR, \fB\-m " NAME
+The root module name.  Default: the API title, in kebab case.
+.TP
+.BI \-\-targets " LIST" "\fR, \fB\-t " LIST
+A comma-separated list of
+.IR models ,
+.IR controllers ,
+.I client
+and
+.IR readme .
+A target that needs another brings it along: a client or a controller always
+brings the models it imports.
+.TP
+.BI \-\-controllers " BACKEND" "\fR, \fB\-c " BACKEND
+.IR vanilla ,
+.I artanis
+or
+.IR none .
+Default: \fIvanilla\fP.
+.TP
+.BI \-\-http " BACKEND" "\fR, \fB\-H " BACKEND
+.IR guile ,
+.I curl
+or
+.IR none .
+Default: \fIguile\fP.
+.TP
+.B \-\-no\-models
+Write no record module.  Useful for a recovered specification that has no
+schemas yet.
+.TP
+.BI \-\-model\-suffix " SUFFIX"
+Append
+.I SUFFIX
+to every generated model name.
+.TP
+.BI \-\-operation\-id\-transform " REGEX:REPLACEMENT"
+Rename operationIds with a Perl-style substitution before they become
+procedure names.
+.TP
+.BI \-\-base\-url " URL"
+Override the first server URL of the specification, which is what the
+generated client starts from.
+.TP
+.BI \-\-config " FILE"
+Read options from a YAML or JSON file.  A command-line flag overrides the
+file, and the file overrides the built-in default.
+.TP
+.B \-\-self\-contained
+Copy the runtime modules next to the generated code and rewrite the generated
+module forms to import the copies, so the tree needs nothing but Guile and
+guile-json.
+.TP
+.B \-\-no\-validate
+Do not check that the input is an OpenAPI 3.x document before generating.
+.TP
+.B \-\-no\-header
+Omit the banner comment that says what each generated file came from.
+.TP
+.BI \-\-header\-file " FILE"
+Add the contents of
+.I FILE
+to the banner of every generated file, which is where a licence or a project
+disclaimer goes.
+.TP
+.BI \-\-dependencies " MODE"
+.I none
+or
+.IR guix .
+The latter writes a
+.I dependencies.scm
+manifest for
+.BR "guix shell \-m" .
+.TP
+.BI \-\-json\-schema\-file " FILE"
+Read a JSON Schema document instead of an OpenAPI one.  The top-level schema
+becomes a component; its definitions are hoisted into
+.IR components/schemas .
+.I FILE#/pointer
+selects a schema nested inside a larger document.
+.TP
+.BI \-\-json\-schema\-root\-name " NAME"
+Name the component generated from the top level of a JSON Schema document.
+.TP
+.BI \-\-api\-fragment " FILE"
+Merge a partial OpenAPI document into the primary one.  Repeatable.
+.TP
+.BI \-\-auth " 'NAME: VALUE'"
+Send a header on every remote fetch: the input, every fragment, and every
+remote reference.  Repeatable, and
+.I ${VAR}
+is expanded from the environment.
+.TP
+.BI \-\-resolve\-external " MODE"
+.IR none ,
+.I targeted
+or
+.IR aggressive .
+The default leaves external references alone; the other two copy what they
+reach into
+.IR components .
+.TP
+.B \-\-request\-response\-models
+Emit a Request and a Response model set, with the members each direction can
+carry.
+.TP
+.B \-\-exclude\-read\-only
+Drop readOnly properties from the single model set.
+.TP
+.B \-\-exclude\-write\-only
+Drop writeOnly properties from the single model set.
+.TP
+.B \-\-x\-extensible\-enums
+Treat
+.I x\-extensible\-enum
+as an enumeration instead of ignoring it.
+.TP
+.B \-\-fault\-tolerant\-enums
+Map an unknown string enumeration value to
+.IR unrecognized
+instead of failing the record.
+.TP
+.B \-\-non\-null\-response\-payloads
+Raise when a declared success body is missing or null, instead of decoding it
+to \fB#f\fP.
+.TP
+.BR \-\-help ", " \-h
+Print the usage and exit.
+.TP
+.BR \-\-version ", " \-v
+Print the version and exit.
+.SH OPTIONS FOR SPEC
+.TP
+.BI \-\-input " FILE" "\fR, \fB\-i " FILE
+The Guile or Artanis source file whose routes are read.
+.TP
+.BI \-\-output " FILE" "\fR, \fB\-o " FILE
+The YAML file to write, or
+.B \-
+for standard output.
+.TP
+.BI \-\-source " READER" "\fR, \fB\-s " READER
+.I guile
+or
+.IR artanis .
+Default: \fIguile\fP.
+.TP
+.BI \-\-title " TEXT" "\fR, \fB\-t " TEXT
+The
+.I info.title
+of the document.  Default: \fIAPI\fP.
+.TP
+.BI \-\-api\-version " VERSION" "\fR, \fB\-V " VERSION
+The
+.I info.version
+of the document.  Default: \fI1.0.0\fP.
+.TP
+.BI \-\-description " TEXT"
+The
+.I info.description
+of the document.
+.TP
+.BI \-\-server " URL"
+A
+.I servers
+entry.  Repeatable.
+.TP
+.BR \-\-help ", " \-h
+Print the usage and exit.
+.TP
+.BR \-\-version ", " \-v
+Print the version and exit.
+.SH EXAMPLES
+Generate a client, controllers and models from a specification:
+.PP
+.nf
+.RS
+guile\-openapi\-generator generate \-i openapi.yaml \-o gen \-m petstore
+.RE
+.fi
+.PP
+Ask for an Artanis adapter and a libcurl client:
+.PP
+.nf
+.RS
+guile\-openapi\-generator generate \-i openapi.yaml \-o gen \\
+    \-m petstore \-c artanis \-H curl
+.RE
+.fi
+.PP
+Keep the options with the project in a checked-in file:
+.PP
+.nf
+.RS
+guile\-openapi\-generator generate \-\-config openapi\-generator.yaml
+.RE
+.fi
+.PP
+Recover the specification of an existing Guile server:
+.PP
+.nf
+.RS
+guile\-openapi\-generator spec \-i app/controllers.scm \-o openapi.yaml
+.RE
+.fi
+.PP
+Recover the specification of an Artanis application, straight to a terminal:
+.PP
+.nf
+.RS
+guile\-openapi\-generator spec \-i app/routes.scm \-s artanis \-o \- | less
+.RE
+.fi
+.SH "EXIT STATUS"
+.B 0
+on success, and
+.B 1
+on any failure, with the reason on standard error.  A generation run that
+wrote nothing, an unknown option value, a source with no routes: all of them
+stop with status 1 rather than producing something plausible.
+.SH ENVIRONMENT
+.TP
+.B GUILE_LOAD_PATH
+Guile's module search path.  The launcher puts the installed library on it
+itself, so a run does not depend on this variable; it is what a program that
+uses the library directly sets.
+.TP
+.B GUILE_OPENAPI_GENERATOR_LIBDIR
+The directory holding
+.IR openapi\-generator.scm .
+The launcher looks beside itself first and only needs this for a tree that was
+moved out of the layout the packages install.
+.SH FILES
+.TP
+.I /usr/share/guile/site/3.0/openapi\-generator.scm
+The public module, \fB(openapi\-generator)\fP.
+.TP
+.I /usr/share/guile/site/3.0/openapi\-generator/
+The rest of the library.
+.TP
+.I /usr/lib/guile/3.0/site\-ccache/openapi\-generator/
+The byte-compiled copies, installed by the packages so that loading a module
+does not compile it on first use.  The exact path follows the distribution's
+Guile.
+.SH "SEE ALSO"
+The project's README, which is the manual: a quick start, a complete example
+application, the generated code explained, and the whole command line.
+.PP
+https://codeberg.org/jjba23/guile\-openapi\-generator
+.SH AUTHOR
+Josep Bigorra <jjbigorra@gmail.com>
+.SH COPYRIGHT
+Copyright \(co 2026 Josep Bigorra.  Licensed under the GNU Affero General Public
+License, version 3 or later.  The documentation is licensed under the GNU Free
+Documentation License, version 1.3 or later.

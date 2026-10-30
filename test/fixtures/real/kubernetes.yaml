@@ -1,0 +1,604 @@
+# A subset of the Kubernetes API as it is published: dotted schema names,
+# allOf composition, IntOrString unions, map properties and content negotiation
+# between JSON and YAML.  The subset covers pods in a namespace.
+openapi: 3.0.3
+info:
+  title: Kubernetes API (pods subset)
+  version: v1.30.0
+  description: |
+    The core pods API.  Responses are JSON by default; YAML is served when the
+    client asks for it.
+  license:
+    name: Apache-2.0
+servers:
+  - url: https://kubernetes.default.svc
+    description: The in-cluster API server
+security:
+  - bearerAuth: []
+tags:
+  - name: CoreV1
+paths:
+  /api/v1/namespaces/{namespace}/pods:
+    parameters:
+      - name: namespace
+        in: path
+        required: true
+        description: Object name and auth scope, such as for teams and projects.
+        schema:
+          type: string
+    get:
+      operationId: listCoreV1NamespacedPod
+      summary: List or watch objects of kind Pod
+      tags:
+        - CoreV1
+      parameters:
+        - name: pretty
+          in: query
+          description: If true, the output is pretty printed.
+          schema:
+            type: string
+        - name: allowWatchBookmarks
+          in: query
+          schema:
+            type: boolean
+        - name: continue
+          in: query
+          description: The continue option should be set when retrieving more results.
+          schema:
+            type: string
+        - name: fieldSelector
+          in: query
+          schema:
+            type: string
+        - name: labelSelector
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: resourceVersion
+          in: query
+          schema:
+            type: string
+        - name: timeoutSeconds
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: watch
+          in: query
+          description: Watch for changes to the described resources.
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/io.k8s.api.core.v1.PodList"
+            application/yaml:
+              schema:
+                type: string
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.Status"
+    post:
+      operationId: createCoreV1NamespacedPod
+      summary: Create a Pod
+      tags:
+        - CoreV1
+      parameters:
+        - name: dryRun
+          in: query
+          description: If set, the operation is only validated.
+          schema:
+            type: string
+            enum:
+              - All
+        - name: fieldManager
+          in: query
+          description: The name of the manager making the change.
+          schema:
+            type: string
+        - name: fieldValidation
+          in: query
+          schema:
+            type: string
+            enum:
+              - Ignore
+              - Warn
+              - Strict
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/io.k8s.api.core.v1.Pod"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/io.k8s.api.core.v1.Pod"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.Status"
+        "409":
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.Status"
+  /api/v1/namespaces/{namespace}/pods/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: The name of the Pod.
+        schema:
+          type: string
+      - name: namespace
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: readCoreV1NamespacedPod
+      summary: Read the specified Pod
+      tags:
+        - CoreV1
+      parameters:
+        - name: pretty
+          in: query
+          schema:
+            type: string
+        - name: exact
+          in: query
+          description: Should the export be exact.
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/io.k8s.api.core.v1.Pod"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.Status"
+    put:
+      operationId: replaceCoreV1NamespacedPod
+      summary: Replace the specified Pod
+      tags:
+        - CoreV1
+      parameters:
+        - name: dryRun
+          in: query
+          schema:
+            type: string
+        - name: fieldManager
+          in: query
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/io.k8s.api.core.v1.Pod"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/io.k8s.api.core.v1.Pod"
+        "409":
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.Status"
+    patch:
+      operationId: patchCoreV1NamespacedPod
+      summary: Partially update the specified Pod
+      tags:
+        - CoreV1
+      parameters:
+        - name: dryRun
+          in: query
+          schema:
+            type: string
+        - name: fieldManager
+          in: query
+          schema:
+            type: string
+        - name: force
+          in: query
+          schema:
+            type: boolean
+      requestBody:
+        required: true
+        content:
+          application/json-patch+json:
+            schema:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+          application/merge-patch+json:
+            schema:
+              $ref: "#/components/schemas/io.k8s.api.core.v1.Pod"
+          application/strategic-merge-patch+json:
+            schema:
+              $ref: "#/components/schemas/io.k8s.api.core.v1.Pod"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/io.k8s.api.core.v1.Pod"
+        "409":
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.Status"
+    delete:
+      operationId: deleteCoreV1NamespacedPod
+      summary: Delete a Pod
+      tags:
+        - CoreV1
+      parameters:
+        - name: gracePeriodSeconds
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: orphanDependents
+          in: query
+          schema:
+            type: boolean
+        - name: propagationPolicy
+          in: query
+          schema:
+            type: string
+            enum:
+              - Orphan
+              - Background
+              - Foreground
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.Status"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.Status"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta:
+      type: object
+      properties:
+        annotations:
+          type: object
+          additionalProperties:
+            type: string
+        creationTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        deletionGracePeriodSeconds:
+          type: integer
+          format: int64
+          nullable: true
+        deletionTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        finalizers:
+          type: array
+          items:
+            type: string
+        generateName:
+          type: string
+        generation:
+          type: integer
+          format: int64
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        name:
+          type: string
+        namespace:
+          type: string
+        resourceVersion:
+          type: string
+          readOnly: true
+        uid:
+          type: string
+          readOnly: true
+    io.k8s.apimachinery.pkg.util.intstr.IntOrString:
+      description: A value that can be an integer or a string.
+      oneOf:
+        - type: integer
+          format: int32
+        - type: string
+    io.k8s.apimachinery.pkg.api.resource.Quantity:
+      description: A fixed-point number of a resource.
+      type: string
+      pattern: "^([+-]?[0-9.]+)([eEinumkKMGTP]*[-+]?[0-9]*)$"
+    io.k8s.api.core.v1.ResourceRequirements:
+      type: object
+      properties:
+        limits:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/io.k8s.apimachinery.pkg.api.resource.Quantity"
+        requests:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/io.k8s.apimachinery.pkg.api.resource.Quantity"
+    io.k8s.api.core.v1.ContainerPort:
+      type: object
+      required:
+        - containerPort
+      properties:
+        containerPort:
+          type: integer
+          format: int32
+        hostIP:
+          type: string
+        hostPort:
+          type: integer
+          format: int32
+        name:
+          type: string
+        protocol:
+          type: string
+          default: TCP
+          enum:
+            - TCP
+            - UDP
+            - SCTP
+    io.k8s.api.core.v1.Container:
+      type: object
+      required:
+        - name
+      properties:
+        args:
+          type: array
+          items:
+            type: string
+        command:
+          type: array
+          items:
+            type: string
+        image:
+          type: string
+        imagePullPolicy:
+          type: string
+          enum:
+            - Always
+            - IfNotPresent
+            - Never
+        name:
+          type: string
+        ports:
+          type: array
+          items:
+            $ref: "#/components/schemas/io.k8s.api.core.v1.ContainerPort"
+        resources:
+          $ref: "#/components/schemas/io.k8s.api.core.v1.ResourceRequirements"
+        terminationMessagePath:
+          type: string
+        workingDir:
+          type: string
+    io.k8s.api.core.v1.Toleration:
+      type: object
+      properties:
+        effect:
+          type: string
+        key:
+          type: string
+        operator:
+          type: string
+        tolerationSeconds:
+          type: integer
+          format: int64
+        value:
+          type: string
+    io.k8s.api.core.v1.PodSpec:
+      type: object
+      required:
+        - containers
+      properties:
+        activeDeadlineSeconds:
+          type: integer
+          format: int64
+        containers:
+          type: array
+          items:
+            $ref: "#/components/schemas/io.k8s.api.core.v1.Container"
+        dnsPolicy:
+          type: string
+        hostNetwork:
+          type: boolean
+        nodeName:
+          type: string
+        nodeSelector:
+          type: object
+          additionalProperties:
+            type: string
+        restartPolicy:
+          type: string
+          default: Always
+          enum:
+            - Always
+            - OnFailure
+            - Never
+        serviceAccountName:
+          type: string
+        terminationGracePeriodSeconds:
+          type: integer
+          format: int64
+        tolerations:
+          type: array
+          items:
+            $ref: "#/components/schemas/io.k8s.api.core.v1.Toleration"
+    io.k8s.api.core.v1.PodCondition:
+      type: object
+      required:
+        - status
+        - type
+      properties:
+        lastProbeTime:
+          type: string
+          format: date-time
+        message:
+          type: string
+        reason:
+          type: string
+        status:
+          type: string
+        type:
+          type: string
+          enum:
+            - PodScheduled
+            - Ready
+            - ContainersReady
+    io.k8s.api.core.v1.PodStatus:
+      type: object
+      properties:
+        conditions:
+          type: array
+          items:
+            $ref: "#/components/schemas/io.k8s.api.core.v1.PodCondition"
+        hostIP:
+          type: string
+        message:
+          type: string
+        phase:
+          type: string
+          enum:
+            - Pending
+            - Running
+            - Succeeded
+            - Failed
+            - Unknown
+        podIP:
+          type: string
+        qosClass:
+          type: string
+        startTime:
+          type: string
+          format: date-time
+    io.k8s.api.core.v1.Pod:
+      description: A pod is a group of one or more containers.
+      type: object
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/io.k8s.api.core.v1.PodSpec"
+        status:
+          $ref: "#/components/schemas/io.k8s.api.core.v1.PodStatus"
+      x-kubernetes-group-version-kind:
+        - group: ""
+          version: v1
+          kind: Pod
+    io.k8s.api.core.v1.PodList:
+      type: object
+      required:
+        - items
+      properties:
+        apiVersion:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/io.k8s.api.core.v1.Pod"
+        kind:
+          type: string
+        metadata:
+          allOf:
+            - $ref: "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"
+    io.k8s.apimachinery.pkg.apis.meta.v1.StatusDetails:
+      type: object
+      properties:
+        causes:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+              reason:
+                type: string
+        group:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        retryAfterSeconds:
+          type: integer
+          format: int32
+        uid:
+          type: string
+    io.k8s.apimachinery.pkg.apis.meta.v1.Status:
+      description: A status is a more specific error or success message.
+      type: object
+      properties:
+        apiVersion:
+          type: string
+        code:
+          type: integer
+          format: int32
+        details:
+          $ref: "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.StatusDetails"
+        kind:
+          type: string
+        message:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"
+        reason:
+          type: string
+        status:
+          type: string
+          enum:
+            - Success
+            - Failure

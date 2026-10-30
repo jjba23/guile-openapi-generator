@@ -9,6 +9,7 @@ Build-Depends:
  guile-3.0-dev,
  pkg-config,
  guile-json,
+ guile-curl,
  veritas
 Standards-Version: 4.6.2
 Homepage: https://codeberg.org/jjba23/guile-openapi-generator

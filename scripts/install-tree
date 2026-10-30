@@ -1,0 +1,208 @@
+#!/bin/sh
+
+# guile-openapi-generator
+
+# Copyright © 2026 Josep Bigorra <jjbigorra@gmail.com>
+
+# guile-openapi-generator is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+
+# guile-openapi-generator is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+
+# You should have received a copy of the GNU Affero General Public License
+# along with guile-openapi-generator.  If not, see <https://www.gnu.org/licenses/>.
+
+# Commentary:
+#
+# The one description of what an installed guile-openapi-generator is.  Every
+# recipe in packaging/ and the container image stage the program by running this
+# script, so a change to the layout lands in all of them at once instead of in
+# four places that look alike until one of them drifts.
+#
+#   scripts/install-tree --destdir build/root            # a staged tree
+#   scripts/install-tree --destdir "$pkgdir" --prefix /usr   # a package
+#
+# What it installs:
+#
+#   $prefix/bin/guile-openapi-generator          the launcher
+#   $prefix/share/man/man1/...                   the manual page
+#   $site_dir/openapi-generator.scm              the public module
+#   $site_dir/openapi-generator/*.scm            the rest of the library
+#   $ccache_dir/openapi-generator/*.go           the byte-compiled copies
+#   $ccache_dir/openapi-generator.go
+#
+# The two Guile directories are asked of the interpreter rather than assumed:
+# the compiled-module directory moves with the distribution and with the
+# architecture (Debian keeps it in the multiarch libdir, openSUSE under /usr/lib64,
+# a Guix profile under its own prefix), and a package that guesses installs
+# modules that are either not found or compiled again on every first use.
+#
+# Only the program is installed.  Licences, README files and changelogs are the
+# business of the packaging layer: %license/%doc, dh_installdocs, or the
+# `install -Dm644 COPYING' the container does.
+#
+# Usage: scripts/install-tree [options]
+#
+#   --destdir DIR     stage the tree under DIR (default: $DESTDIR, else empty)
+#   --prefix DIR      installation prefix (default: /usr)
+#   --site-dir DIR    where the sources go (default: asked of Guile for /usr,
+#                     otherwise $prefix/share/guile/site/3.0)
+#   --ccache-dir DIR  where the byte-compiled copies go (default: asked of Guile
+#                     for /usr, otherwise $prefix/lib/guile/3.0/site-ccache)
+#   --no-compile      install the sources without byte-compiling them
+#   --help            print this text
+
+set -eu
+
+program=guile-openapi-generator
+
+usage() {
+    sed -n '/^# Usage:/,/^#   --help/p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+fail() {
+    echo "install-tree: $*" >&2
+    exit 1
+}
+
+# pkg-config knows the directories when the Guile development files are
+# installed, which is the case in every distribution build.  It is asked only
+# for /usr: a prefix of its own gets its own layout, because the launcher looks
+# for the library beside its own prefix and would not find one installed under
+# /usr.
+pkgconfig_variable() {
+    if command -v pkg-config >/dev/null 2>&1; then
+        pkg-config --variable="$1" guile-3.0 2>/dev/null || true
+    fi
+}
+
+guile_variable() {
+    guile -c "(display ($1))" 2>/dev/null || true
+}
+
+destdir=${DESTDIR:-}
+prefix=/usr
+site_dir=
+ccache_dir=
+compile=yes
+
+while [ $# -gt 0 ]; do
+    case $1 in
+        --destdir)
+            [ $# -ge 2 ] || fail "--destdir needs a directory"
+            destdir=$2
+            shift 2
+            ;;
+        --prefix)
+            [ $# -ge 2 ] || fail "--prefix needs a directory"
+            prefix=$2
+            shift 2
+            ;;
+        --site-dir)
+            [ $# -ge 2 ] || fail "--site-dir needs a directory"
+            site_dir=$2
+            shift 2
+            ;;
+        --ccache-dir)
+            [ $# -ge 2 ] || fail "--ccache-dir needs a directory"
+            ccache_dir=$2
+            shift 2
+            ;;
+        --no-compile)
+            compile=no
+            shift
+            ;;
+        --help | -h)
+            usage
+            exit 0
+            ;;
+        *)
+            fail "unknown option $1 (try --help)"
+            ;;
+    esac
+done
+
+[ -f src/openapi-generator.scm ] && [ -d src/openapi-generator ] ||
+    fail "run this from the top of the source tree"
+
+if [ -z "$site_dir" ]; then
+    if [ "$prefix" = /usr ]; then
+        site_dir=$(pkgconfig_variable sitedir)
+        [ -n "$site_dir" ] || site_dir=$(guile_variable %site-dir)
+    fi
+    [ -n "$site_dir" ] || site_dir=$prefix/share/guile/site/3.0
+fi
+
+if [ -z "$ccache_dir" ]; then
+    if [ "$prefix" = /usr ]; then
+        ccache_dir=$(pkgconfig_variable siteccachedir)
+        [ -n "$ccache_dir" ] || ccache_dir=$(guile_variable %site-ccache-dir)
+    fi
+    [ -n "$ccache_dir" ] || ccache_dir=$prefix/lib/guile/3.0/site-ccache
+fi
+
+case $destdir in
+    */) destdir=${destdir%/} ;;
+esac
+
+root=$destdir
+
+echo "==> Installing $program"
+echo "    prefix:  $root$prefix"
+echo "    sources: $root$site_dir"
+echo "    ccache:  $root$ccache_dir"
+
+install -d "$root$prefix/bin" \
+    "$root$prefix/share/man/man1" \
+    "$root$site_dir/openapi-generator" \
+    "$root$ccache_dir/openapi-generator"
+
+# The launcher takes its prefix from its own location, so it is installed
+# beside the library and not wrapped with a path baked in.
+install -m 0755 scripts/guile-openapi-generator \
+    "$root$prefix/bin/$program"
+install -m 0644 man/guile-openapi-generator.1 \
+    "$root$prefix/share/man/man1/$program.1"
+
+install -m 0644 src/openapi-generator/*.scm \
+    "$root$site_dir/openapi-generator/"
+install -m 0644 src/openapi-generator.scm "$root$site_dir/"
+
+modules=$(set -- src/openapi-generator/*.scm; echo $#)
+echo "    $modules modules"
+
+if [ "$compile" = yes ]; then
+    guild=$(command -v guild 2>/dev/null || command -v guild-3.0 || true)
+    [ -n "$guild" ] || fail "guild is needed to byte-compile the modules"
+
+    # Compile each module on its own so that a failure names the file, and
+    # compile from src/ so the staged copy does not need to be on the load
+    # path.  The loop uses the shell's globbing rather than find(1): the base
+    # image of the container has no findutils, and a `find | while' whose left
+    # side is missing silently compiles nothing.
+    for scm_file in src/openapi-generator/*.scm; do
+        name=${scm_file##*/}
+        "$guild" compile -L src \
+            -o "$root$ccache_dir/openapi-generator/${name%.scm}.go" \
+            "$scm_file"
+    done
+    "$guild" compile -L src \
+        -o "$root$ccache_dir/openapi-generator.go" \
+        src/openapi-generator.scm
+
+    compiled=$(set -- "$root$ccache_dir/openapi-generator/"*.go; echo $#)
+    echo "    $compiled modules byte-compiled"
+
+    # A module without its compiled copy is compiled again the first time it is
+    # loaded, which is the whole reason the packages carry the cache.  The count
+    # is the assertion that the loop above really ran.
+    [ "$compiled" -eq "$modules" ] ||
+        fail "byte-compiled $compiled of $modules modules"
+fi
+
+echo "==> Installed $program"

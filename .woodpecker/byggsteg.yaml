@@ -1,19 +1,19 @@
-# heks-linux
+# guile-openapi-generator
 
 # Copyright © Josep Bigorra <jjbigorra@gmail.com>
 
-# heks-linux is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
+# guile-openapi-generator is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
 
-# heks-linux is distributed in the hope that it will be useful,
+# guile-openapi-generator is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero
+# General Public License for more details.
 
-# You should have received a copy of the GNU General Public License
-# along with heks-linux.  If not, see <https://www.gnu.org/licenses/>.
+# You should have received a copy of the GNU Affero General Public License along
+# with guile-openapi-generator.  If not, see <https://www.gnu.org/licenses/>.
 
 variables:
   - &byggsteg_image "docker.io/jjba23/byggsteg-woodpecker:v0.3.0"
@@ -50,9 +50,14 @@ steps:
     settings:
       BYGGSTEG_STEP: submit-job
       BYGGSTEG_URL: *jointhefreeworld_byggsteg_url
+      # Two tasks in one job: the suites, and then the installation every
+      # recipe depends on.  `maak package-smoke' runs scripts/install-tree --
+      # the script the Arch, Debian and openSUSE recipes and the container image
+      # all run -- and drives the staged launcher in both directions, so a
+      # layout that would only fail inside a build chroot fails here instead.
       BYGGSTEG_JOB_CODE: |
         (lambda()
-          `((task . ("maak-test"))
+          `((task . ("maak-test" "maak-package-smoke"))
             (project . "%%CI_REPO_NAME%%")
             (branch-name . "%%CI_COMMIT_BRANCH%%")
             (clone-url . "%%CI_REPO_CLONE_URL%%")

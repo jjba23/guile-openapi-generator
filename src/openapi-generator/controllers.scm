@@ -40,6 +40,12 @@
 ;; hit.  The two backends share this module: the Artanis adapter turns an
 ;; Artanis request into an @code{<http-request>}, calls @code{dispatch}, and
 ;; renders the @code{<http-response>} it gets back.
+;;
+;; A request body is decoded as the media type it actually arrived with.  When
+;; an operation declares more than one, the declared names are compared exactly
+;; on their essence — @code{application/json-patch+json} and
+;; @code{application/merge-patch+json} are two schemas, not one — and a body
+;; whose schema has no record of its own is decoded by the shape itself.
 
 (define-module (openapi-generator controllers)
   #:declarative? #t
@@ -193,13 +199,17 @@ displays strings without their quotes."
                        #:registry (context-request-registry ctx)))))
 
 (define (media-type-match-expression media-type variable)
-  "Return source that tests whether @var{variable} names @var{media-type}."
-  (case (media-type-kind media-type)
-    ((json) (format #f "(string-contains ~a \"json\")" variable))
-    ((text) (format #f "(string-contains ~a \"text/\")" variable))
-    (else (format #f "(string-contains ~a ~s)"
-                  variable
-                  (string-downcase (media-type-name media-type))))))
+  "Return source that tests whether @var{variable} names @var{media-type}.
+
+The test is on the media type's essence: its declared name, with any parameters
+ignored, so @code{application/json; charset=utf-8} still counts as
+@code{application/json}.  The name is compared exactly rather than searched for a
+fragment, because an operation may declare @code{application/json-patch+json} and
+@code{application/merge-patch+json} side by side: both contain \"json\", and a
+substring test would send every patch to the first of them."
+  (let ((name (string-downcase (media-type-name media-type))))
+    (format #f "(or (string=? ~a ~s) (string-prefix? ~s ~a))"
+            variable name (string-append name ";") variable)))
 
 (define (request-media-decode-expression ctx media-type)
   "Return source that decodes a request body of @var{media-type}."
@@ -211,24 +221,37 @@ displays strings without their quotes."
       ((not shape) raw)
       ((eq? kind 'form)
        (format #f
-               "(let ((raw ~a)) (if (string? raw) (~a (coerce-form-values (parse-query raw) ~a)) #f))"
-               raw converter (form-field-types ctx shape)))
+               "(let ((raw ~a)) (if (string? raw) ~a #f))"
+               raw
+               (unbox-expression
+                ctx shape
+                (format #f "(coerce-form-values (parse-query raw) ~a)"
+                        (form-field-types ctx shape)))))
       ((eq? kind 'multipart)
        (format #f
-               "(let ((raw ~a)) (~a (coerce-form-values (parse-multipart-body raw (http-request-header request \"Content-Type\")) ~a)))"
-               raw converter (form-field-types ctx shape)))
+               "(let ((raw ~a)) ~a)"
+               raw
+               (unbox-expression
+                ctx shape
+                (format #f
+                        "(coerce-form-values (parse-multipart-body raw (http-request-header request \"Content-Type\")) ~a)"
+                        (form-field-types ctx shape)))))
       ((memq kind '(text binary))
        (if (shape-name shape)
            (format #f "(~a ~a)" converter raw)
            raw))
       (else
+       ;; The body is decoded as the shape it declares, and an inline shape is
+       ;; decoded by the form @code{unbox-expression} writes for it -- a list
+       ;; body decodes its items -- instead of calling a converter that only
+       ;; exists for named schemas.
        (format #f
                (string-append
-                "(let ((raw (http-request-body request)))"
-                " (cond ((string? raw) (~a (json-string->jso raw)))"
-                " ((jso-object? raw) (~a raw)) (else #f)))")
-               converter
-               converter)))))
+                "(let ((node (let ((raw (http-request-body request)))"
+                " (cond ((string? raw) (json-string->jso raw))"
+                " ((jso-object? raw) raw) (else #f)))))"
+                " (if (eq? node #f) #f ~a))")
+               (unbox-expression ctx shape 'node))))))
 
 (define (request-body-decoder operation ctx)
   "Return the source that decodes the request body of @var{operation}.

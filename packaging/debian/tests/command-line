@@ -1,0 +1,94 @@
+#!/bin/sh
+
+# guile-openapi-generator
+
+# Copyright © 2026 Josep Bigorra <jjbigorra@gmail.com>
+
+# guile-openapi-generator is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+# guile-openapi-generator is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+
+# You should have received a copy of the GNU Affero General Public License
+# along with guile-openapi-generator.  If not, see <https://www.gnu.org/licenses/>.
+
+# Commentary:
+#
+# The installed package, exercised from the outside.  The unit suites run from
+# the source tree during the build; this runs after installation, in a clean
+# container that holds nothing but what the package depends on, and that is the
+# only place where the launcher's own prefix, the site directory and the
+# byte-compiled cache are proved to be where Guile looks for them.
+#
+# Both directions are covered: a specification into a tree of modules, and the
+# routes of a Guile server back into a specification.
+
+set -eu
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# The launcher, without arguments that read a specification.
+guile-openapi-generator --version | grep -q '^guile-openapi-generator '
+guile-openapi-generator --help | grep -q 'Usage:'
+guile-openapi-generator spec --help | grep -q 'Usage:'
+
+# The library loads from the installed site directory, with no sources and no
+# GUILE_LOAD_PATH of our own.  The writer module is here so that the YAML half
+# of the library is loaded as well.
+guile -c '(use-modules (openapi-generator)) (use-modules (openapi-generator yaml-writer))'
+
+cat >"$work/api.yaml" <<'YAML'
+openapi: 3.0.3
+info:
+  title: Smoke
+  version: "1.0.0"
+paths:
+  /ping:
+    get:
+      operationId: ping
+      responses:
+        "200":
+          description: pong
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Pong"}
+components:
+  schemas:
+    Pong:
+      type: object
+      required: [message]
+      properties:
+        message: {type: string}
+YAML
+
+guile-openapi-generator generate -i "$work/api.yaml" -o "$work/gen" -m smoke
+test -f "$work/gen/smoke/models.scm"
+test -f "$work/gen/smoke/controllers.scm"
+grep -q 'define-module (smoke controllers)' "$work/gen/smoke/controllers.scm"
+
+# The generated tree loads, which needs the runtime the package installed.
+guile -c "(use-modules (smoke models)) (use-modules (smoke controllers))"
+
+# The other direction: the routes of a Guile server become a document.
+cat >"$work/app.scm" <<'SCHEME'
+(get "/ping" ping-handler)
+(get "/pets/:petId" get-pet)
+SCHEME
+
+guile-openapi-generator spec -i "$work/app.scm" -o "$work/openapi.yaml"
+grep -q '/pets/{petId}' "$work/openapi.yaml"
+grep -q 'operationId: getPet' "$work/openapi.yaml"
+
+# An error is a status, not a backtrace.
+if guile-openapi-generator spec -i "$work/missing.scm" -o - 2>/dev/null; then
+  echo "a missing source was not reported as a failure" >&2
+  exit 1
+fi
+
+echo "the installed command works in both directions"

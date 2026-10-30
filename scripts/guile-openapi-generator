@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+
+# guile-openapi-generator
+
+# Copyright © 2026 Josep Bigorra <jjbigorra@gmail.com>
+
+# guile-openapi-generator is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+# guile-openapi-generator is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+
+# You should have received a copy of the GNU Affero General Public License
+# along with guile-openapi-generator.  If not, see <https://www.gnu.org/licenses/>.
+
+# Commentary:
+#
+# The command line the packages install.  The library is a set of Guile modules
+# and the command is a few lines of Scheme away, but a packaged tool needs a
+# name on PATH: this launcher puts the modules on Guile's load path and runs
+# `(openapi-generator cli)', so that
+#
+#   guile-openapi-generator generate -i openapi.yaml -o gen
+#   guile-openapi-generator spec -i app/controllers.scm -o openapi.yaml
+#
+# work the same way from a package, from a container, and from a checkout.
+#
+# The launcher resolves its own prefix rather than trusting an environment
+# variable: installed, it sits in /usr/bin next to /usr/share/guile/site/3.0;
+# in a checkout, it sits in scripts/ next to src/.  Both layouts are tried in
+# that order, so `./scripts/guile-openapi-generator test' runs the sources
+# beside it instead of an older installed copy -- which would otherwise fail as
+# a missing module rather than as the version mismatch it is.
+#
+# Everything after the program name goes to the Scheme command untouched: the
+# options of `generate' and `spec' are parsed there and nowhere else, so this
+# script cannot drift out of step with them.
+
+set -euo pipefail
+
+script_path=$(readlink -f "$0")
+script_dir=$(dirname "${script_path}")
+prefix=$(dirname "${script_dir}")
+
+# A tree that was moved, or a store layout with a different prefix, can say
+# where the modules are instead of relying on the two layouts below.
+candidates=()
+if [ -n "${GUILE_OPENAPI_GENERATOR_LIBDIR:-}" ]; then
+  candidates+=("${GUILE_OPENAPI_GENERATOR_LIBDIR}")
+fi
+candidates+=("${prefix}/share/guile/site/3.0" "${prefix}/src")
+
+site_dir=""
+for candidate in "${candidates[@]}"; do
+  if [ -f "${candidate}/openapi-generator.scm" ]; then
+    site_dir="${candidate}"
+    break
+  fi
+done
+
+if [ -z "${site_dir}" ]; then
+  echo "guile-openapi-generator: cannot find the library" >&2
+  echo "  looked in: ${candidates[*]}" >&2
+  echo "  set GUILE_OPENAPI_GENERATOR_LIBDIR to the directory holding openapi-generator.scm" >&2
+  exit 1
+fi
+
+# `main' reads its arguments from `(cdr (command-line))', which is what Guile
+# puts after the program name for `-c', so the arguments need no rewriting.
+exec guile -L "${site_dir}" \
+  -c '(exit ((@ (openapi-generator cli) main)))' "$@"

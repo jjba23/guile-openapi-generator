@@ -1,0 +1,65 @@
+#!/bin/sh
+
+# guile-openapi-generator
+
+# Copyright © 2026 Josep Bigorra <jjbigorra@gmail.com>
+
+# guile-openapi-generator is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+
+# guile-openapi-generator is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero
+# General Public License for more details.
+
+# You should have received a copy of the GNU Affero General Public License along
+# with guile-openapi-generator.  If not, see <https://www.gnu.org/licenses/>.
+
+# Commentary:
+#
+# The layout of the installed package, checked where a layout can actually be
+# wrong: after installation.  The unit suites run from the source tree and never
+# see where a file landed; this test asks the installed Guile which directories
+# it reads and then insists that the package put the modules and their
+# byte-compiled copies exactly there.
+#
+# GUILE_AUTO_COMPILE=0 is what makes the last check mean something: with it,
+# Guile refuses to compile a module it cannot find a compiled copy for, so a
+# successful load proves the copies in /usr/lib/<triplet>/guile/3.0/site-ccache
+# are the ones being used, and not a cache built on the fly in $HOME.
+
+set -eu
+
+export GUILE_AUTO_COMPILE=0
+
+test -x /usr/bin/guile-openapi-generator
+test -f /usr/share/man/man1/guile-openapi-generator.1
+
+site_dir=$(guile -c '(display (%site-dir))')
+ccache_dir=$(guile -c '(display (%site-ccache-dir))')
+
+test -f "$site_dir/openapi-generator.scm"
+test -d "$site_dir/openapi-generator"
+test -d "$ccache_dir/openapi-generator"
+
+sources=$(set -- "$site_dir/openapi-generator/"*.scm; echo $#)
+compiled=$(set -- "$ccache_dir/openapi-generator/"*.go; echo $#)
+
+# A module without its compiled copy is compiled again on first use, which is
+# the whole reason the package carries the cache.
+test "$sources" -gt 0
+test "$sources" -eq "$compiled"
+
+# Every module loads from the installed directories, without compiling.
+guile -c '(use-modules (openapi-generator)
+                       (openapi-generator cli)
+                       (openapi-generator yaml-writer)
+                       (openapi-generator routes)
+                       (openapi-generator artanis-routes))'
+
+# And the command still works with nothing left to compile.
+guile-openapi-generator --version | grep -q '^guile-openapi-generator '
+
+echo "$compiled of $sources modules installed in $site_dir and $ccache_dir"

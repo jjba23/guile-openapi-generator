@@ -17,7 +17,7 @@
 
 # Maintainer: Josep Bigorra <jjbigorra@gmail.com>
 pkgname=guile-openapi-generator
-pkgver=0.0.7
+pkgver=0.1.0
 pkgrel=1
 pkgdesc="OpenAPI 3 to Guile Scheme code generator"
 arch=('any')
@@ -34,12 +34,23 @@ makedepends=(
   'pkgconf'
 )
 
+# The suite is one runner over every Veritas spec, so it needs Veritas itself;
+# the libcurl transport test needs guile-curl and skips cleanly without it.
 checkdepends=(
   'veritas'
+  'guile-curl'
+)
+
+optdepends=(
+  'guile-curl: generated libcurl clients'
+  'artanis: generated Artanis controller adapters'
 )
 
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
-sha256sums=('b5d177d215f5fd05dbc069d063e2283a5da9ad2412325e0dc10c3bb89cbb2608')
+# This recipe tracks the version in the tree.  The tag and its tarball are cut
+# from that tree, so the checksum is filled in with `updpkgsums' when the tag is
+# published; packaging/README.org describes the release steps.
+sha256sums=('SKIP')
 
 # veritas is produced by the same packaging batch; build it first.
 
@@ -56,41 +67,33 @@ _compiled_dir() {
     || echo /usr/lib/guile/3.0/site-ccache
 }
 
-build() {
-  cd "$srcdir/guile-openapi-generator"
-
-  # Byte-compile every module, mirroring the source tree under a staging
-  # directory that package() copies into the compiled site directory.
-  rm -rf "$srcdir/ccache"
-  mkdir -p "$srcdir/ccache/openapi-generator"
-
-  while IFS= read -r scm_file; do
-    rel_path="${scm_file#src/}"
-    go_file="$srcdir/ccache/${rel_path%.scm}.go"
-    mkdir -p "$(dirname "$go_file")"
-    guild compile -L src -o "$go_file" "$scm_file"
-  done < <(find src/openapi-generator -name '*.scm')
-}
-
 check() {
   cd "$srcdir/guile-openapi-generator"
 
-  VERITAS_TEST_TYPE=unit VERITAS_RUN_BENCHMARKS=false guile -L ./src -L ./test -c '((@ (veritas runner) run-tests))'
+  # The suites read the fixtures and write their generated trees relative to
+  # the sources, so they run from the checkout rather than from a copy.
+  VERITAS_TEST_MODULE=veritas \
+    VERITAS_TEST_TOP_DIR=test \
+    VERITAS_TEST_TYPE=unit \
+    VERITAS_RUN_BENCHMARKS=false \
+    guile -L ./src -L ./test -c '(exit ((@ (veritas runner) run-tests)))'
 }
 
 package() {
   cd "$srcdir/guile-openapi-generator"
 
+  # The layout — launcher, manual page, modules and their byte-compiled
+  # copies — comes from the installer every recipe and the container share,
+  # so this package cannot drift from the Debian, openSUSE or container one.
+  # The two directories are passed explicitly because pkg-config's answer is
+  # the one this distribution's Guile looks at, and the installer would
+  # otherwise ask the interpreter it finds on PATH.
+  sh scripts/install-tree --destdir "$pkgdir" \
+    --site-dir "$(_site_dir)" \
+    --ccache-dir "$(_compiled_dir)"
 
-  site_dir="$(_site_dir)"
-  install -d "$pkgdir${site_dir}/openapi-generator"
-  cp -r src/openapi-generator/. "$pkgdir${site_dir}/openapi-generator/"
-  install -m644 src/openapi-generator.scm "$pkgdir${site_dir}/"
-
-  ccache_dir="$(_compiled_dir)"
-  install -d "$pkgdir${ccache_dir}/openapi-generator"
-  cp -r "$srcdir/ccache/openapi-generator/." "$pkgdir${ccache_dir}/openapi-generator/"
-
+  # Licences and documentation are this recipe's business, so they follow
+  # Arch's own conventions rather than the installer's prefix/share/doc.
   install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
   install -Dm644 README.org "$pkgdir/usr/share/doc/$pkgname/README.org"
 }

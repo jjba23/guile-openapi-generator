@@ -20,13 +20,15 @@
 %global debug_package %{nil}
 
 Name:           guile-openapi-generator
-Version:        0.0.10
+Version:        0.1.0
 Release:        0
 Summary:        OpenAPI 3 to Guile Scheme code generator
 License:        AGPL-3.0-or-later
 URL:            https://codeberg.org/jjba23/guile-openapi-generator
 Source0:        %{name}-%{version}.tar.gz
 BuildRequires:  pkgconfig(guile-3.0)
+# The installer asks Guile's pkg-config file for the two module directories.
+BuildRequires:  pkgconf
 BuildRequires:  guile-json
 BuildRequires:  veritas
 Requires:       guile
@@ -51,31 +53,32 @@ security schemes in the specification.
 # the interpreter's compiled-module directory.
 
 %install
-# Both directories are asked of Guile's pkg-config file rather than
-# assumed, so the modules land where this distribution's Guile looks
-# for them.
-SITE_DIR="%{buildroot}$(pkg-config --variable=sitedir guile-3.0)"
-CCACHE_DIR="%{buildroot}$(pkg-config --variable=siteccachedir guile-3.0)"
+# The layout — launcher, manual page, modules and their byte-compiled
+# copies — comes from the installer every recipe and the container share.
+# It asks Guile's pkg-config file for the two directories, so the modules
+# land where this distribution's Guile looks for them (%{_libdir} here,
+# the multiarch libdir on Debian, /usr/lib on Arch).
+sh scripts/install-tree --destdir %{buildroot} --prefix %{_prefix}
 
-mkdir -p "$SITE_DIR/openapi-generator" "$CCACHE_DIR/openapi-generator"
-cp -r src/openapi-generator/. "$SITE_DIR/openapi-generator/"
-cp src/openapi-generator.scm "$SITE_DIR/"
-
-# Byte-compile every module so that loading it does not compile it
-# again on first use.
-find "$SITE_DIR/openapi-generator" -name '*.scm' | while read -r scm_file; do
-  rel_path="${scm_file#$SITE_DIR/}"
-  go_file="$CCACHE_DIR/${rel_path%.scm}.go"
-  mkdir -p "$(dirname "$go_file")"
-  guild compile -L "$SITE_DIR" -o "$go_file" "$scm_file"
-done
+# Licences and documentation are not installed here: %license and %doc
+# below put them under the directories this distribution expects, which
+# are not the ones the installer's own layout would use.
 
 %check
-VERITAS_TEST_TYPE=unit VERITAS_RUN_BENCHMARKS=false guile -L ./src -L ./test -c '((@ (veritas runner) run-tests))'
+# The libcurl transport test skips itself when guile-curl is not installed;
+# everything else runs, which is what makes the check useful without pulling
+# an optional transport into the build requirements.
+VERITAS_TEST_MODULE=veritas \
+VERITAS_TEST_TOP_DIR=test \
+VERITAS_TEST_TYPE=unit \
+VERITAS_RUN_BENCHMARKS=false \
+guile -L ./src -L ./test -c '(exit ((@ (veritas runner) run-tests)))'
 
 %files
 %license COPYING
 %doc README.org
+%{_bindir}/guile-openapi-generator
+%{_mandir}/man1/guile-openapi-generator.1%{?ext_man}
 %dir %{_datadir}/guile
 %dir %{_datadir}/guile/site
 %dir %{_datadir}/guile/site/3.0
@@ -85,5 +88,6 @@ VERITAS_TEST_TYPE=unit VERITAS_RUN_BENCHMARKS=false guile -L ./src -L ./test -c 
 %dir %{_libdir}/guile/3.0
 %dir %{_libdir}/guile/3.0/site-ccache
 %{_libdir}/guile/3.0/site-ccache/openapi-generator
+%{_libdir}/guile/3.0/site-ccache/openapi-generator.go
 
 %changelog

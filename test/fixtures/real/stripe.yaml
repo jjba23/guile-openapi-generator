@@ -1,0 +1,663 @@
+# The shape of the Stripe API: form-encoded request bodies, an idempotency
+# header, cursor pagination, the list envelope and the error envelope.  Card
+# numbers never appear in a fixture; the schemas stop at the identifiers.
+openapi: 3.0.3
+info:
+  title: Stripe API (customers and charges subset)
+  version: "2024-06-20"
+  description: |
+    A subset of the Stripe API, enough to exercise the parts that make it
+    awkward to describe: every write is form-encoded, pagination is by cursor,
+    and every response is wrapped in an object envelope.
+  license:
+    name: Apache-2.0
+servers:
+  - url: https://api.stripe.com
+    description: Live mode
+  - url: https://api.stripe.com/v1
+    description: The versioned prefix
+security:
+  - bearerAuth: []
+tags:
+  - name: customers
+  - name: charges
+paths:
+  /v1/customers:
+    get:
+      operationId: ListCustomers
+      summary: List all customers
+      tags:
+        - customers
+      parameters:
+        - name: limit
+          in: query
+          description: A limit on the number of objects returned.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: starting_after
+          in: query
+          description: A cursor for use in pagination.
+          schema:
+            type: string
+        - name: ending_before
+          in: query
+          schema:
+            type: string
+        - name: email
+          in: query
+          description: A case-sensitive filter on the customer email.
+          schema:
+            type: string
+        - name: expand
+          in: query
+          description: The paths to expand in the response.
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+        - name: Stripe-Version
+          in: header
+          description: The API version to use for this request.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A dictionary with a data property that contains the customers.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/customer-list"
+        "400":
+          $ref: "#/components/responses/apiError"
+        "401":
+          $ref: "#/components/responses/apiError"
+    post:
+      operationId: CreateCustomer
+      summary: Create a customer
+      tags:
+        - customers
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: A unique key that makes the request safe to retry.
+          schema:
+            type: string
+        - name: Stripe-Version
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/customer-create"
+      responses:
+        "200":
+          description: The new customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/customer"
+        "400":
+          $ref: "#/components/responses/apiError"
+        "402":
+          $ref: "#/components/responses/apiError"
+  /v1/customers/{customer}:
+    parameters:
+      - name: customer
+        in: path
+        required: true
+        description: The customer identifier, `cus_...`.
+        schema:
+          type: string
+    get:
+      operationId: RetrieveCustomer
+      summary: Retrieve a customer
+      tags:
+        - customers
+      parameters:
+        - name: expand
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        "200":
+          description: The customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/customer"
+        "404":
+          $ref: "#/components/responses/apiError"
+    post:
+      operationId: UpdateCustomer
+      summary: Update a customer
+      tags:
+        - customers
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/customer-update"
+      responses:
+        "200":
+          description: The updated customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/customer"
+        "404":
+          $ref: "#/components/responses/apiError"
+    delete:
+      operationId: DeleteCustomer
+      summary: Delete a customer
+      tags:
+        - customers
+      responses:
+        "200":
+          description: The deleted customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/deleted-customer"
+        "404":
+          $ref: "#/components/responses/apiError"
+  /v1/charges:
+    get:
+      operationId: ListCharges
+      summary: List all charges
+      tags:
+        - charges
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: customer
+          in: query
+          description: Only return charges for this customer.
+          schema:
+            type: string
+        - name: created
+          in: query
+          description: A filter on the creation date.
+          style: deepObject
+          explode: true
+          schema:
+            type: object
+            properties:
+              gt:
+                type: integer
+              gte:
+                type: integer
+              lt:
+                type: integer
+              lte:
+                type: integer
+      responses:
+        "200":
+          description: A dictionary with a data property that contains the charges.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/charge-list"
+    post:
+      operationId: CreateCharge
+      summary: Create a charge
+      description: |
+        Charges a card or a source.  The amount is in the smallest currency
+        unit, and the currency is a three-letter ISO code.
+      tags:
+        - charges
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/charge-create"
+          application/json:
+            schema:
+              $ref: "#/components/schemas/charge-create"
+      responses:
+        "200":
+          description: The new charge
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/charge"
+        "400":
+          $ref: "#/components/responses/apiError"
+        "402":
+          description: The card was declined
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/api-errors"
+        "409":
+          $ref: "#/components/responses/apiError"
+  /v1/charges/{charge}/refunds:
+    parameters:
+      - name: charge
+        in: path
+        required: true
+        description: The charge identifier, `ch_...`.
+        schema:
+          type: string
+    get:
+      operationId: ListRefunds
+      summary: List the refunds of a charge
+      tags:
+        - charges
+      responses:
+        "200":
+          description: A list of refunds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/refund-list"
+        "404":
+          $ref: "#/components/responses/apiError"
+    post:
+      operationId: CreateRefund
+      summary: Create a refund
+      tags:
+        - charges
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - charge
+              properties:
+                charge:
+                  type: string
+                amount:
+                  type: integer
+                  description: A positive integer in the smallest currency unit.
+                reason:
+                  type: string
+                  enum:
+                    - duplicate
+                    - fraudulent
+                    - requested_by_customer
+                metadata:
+                  type: object
+                  additionalProperties:
+                    type: string
+      responses:
+        "200":
+          description: The new refund
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/refund"
+        "400":
+          $ref: "#/components/responses/apiError"
+        "409":
+          description: The charge is already refunded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/api-errors"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: The secret key, as a bearer token.
+  responses:
+    apiError:
+      description: The request failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/api-errors"
+  schemas:
+    api-errors:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - type
+            - message
+          properties:
+            type:
+              type: string
+              enum:
+                - api_error
+                - card_error
+                - idempotency_error
+                - invalid_request_error
+            charge:
+              type: string
+            code:
+              type: string
+              nullable: true
+            decline_code:
+              type: string
+            doc_url:
+              type: string
+              format: uri
+            message:
+              type: string
+            param:
+              type: string
+            payment_intent:
+              type: string
+    metadata:
+      type: object
+      additionalProperties:
+        type: string
+      description: A set of key-value pairs.
+    address:
+      type: object
+      nullable: true
+      properties:
+        city:
+          type: string
+          nullable: true
+        country:
+          type: string
+          nullable: true
+        line1:
+          type: string
+          nullable: true
+        line2:
+          type: string
+          nullable: true
+        postal_code:
+          type: string
+          nullable: true
+        state:
+          type: string
+          nullable: true
+    customer:
+      type: object
+      required:
+        - id
+        - object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        object:
+          type: string
+          readOnly: true
+          enum:
+            - customer
+        address:
+          $ref: "#/components/schemas/address"
+        balance:
+          type: integer
+          description: The current balance, negative for credit.
+        created:
+          type: integer
+          format: unix-time
+          readOnly: true
+        currency:
+          type: string
+          nullable: true
+        default_source:
+          type: string
+          nullable: true
+        delinquent:
+          type: boolean
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        email:
+          type: string
+          format: email
+          nullable: true
+        invoice_prefix:
+          type: string
+        livemode:
+          type: boolean
+          readOnly: true
+        metadata:
+          $ref: "#/components/schemas/metadata"
+        name:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+    customer-create:
+      type: object
+      properties:
+        address:
+          $ref: "#/components/schemas/address"
+        description:
+          type: string
+        email:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/metadata"
+        name:
+          type: string
+        payment_method:
+          type: string
+        phone:
+          type: string
+    customer-update:
+      type: object
+      properties:
+        address:
+          $ref: "#/components/schemas/address"
+        description:
+          type: string
+        email:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/metadata"
+        name:
+          type: string
+        phone:
+          type: string
+    deleted-customer:
+      type: object
+      required:
+        - id
+        - deleted
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+        deleted:
+          type: boolean
+    customer-list:
+      type: object
+      required:
+        - object
+        - data
+        - has_more
+      properties:
+        object:
+          type: string
+          enum:
+            - list
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/customer"
+        has_more:
+          type: boolean
+        total_count:
+          type: integer
+        url:
+          type: string
+    charge:
+      type: object
+      required:
+        - id
+        - object
+        - amount
+        - currency
+      properties:
+        id:
+          type: string
+          readOnly: true
+        object:
+          type: string
+          enum:
+            - charge
+        amount:
+          type: integer
+        amount_captured:
+          type: integer
+        captured:
+          type: boolean
+        created:
+          type: integer
+          readOnly: true
+        currency:
+          type: string
+          description: Three-letter ISO currency code, lower case.
+        customer:
+          description: Either the customer identifier or the expanded object.
+          anyOf:
+            - type: string
+            - $ref: "#/components/schemas/customer"
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        dispute:
+          type: boolean
+          nullable: true
+        metadata:
+          $ref: "#/components/schemas/metadata"
+        paid:
+          type: boolean
+        refunded:
+          type: boolean
+        status:
+          type: string
+          enum:
+            - succeeded
+            - pending
+            - failed
+    charge-create:
+      type: object
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          type: integer
+        currency:
+          type: string
+        customer:
+          type: string
+        description:
+          type: string
+        capture:
+          type: boolean
+          default: true
+        metadata:
+          $ref: "#/components/schemas/metadata"
+        source:
+          type: string
+          description: A payment source identifier.
+    charge-list:
+      type: object
+      required:
+        - object
+        - data
+        - has_more
+      properties:
+        object:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/charge"
+        has_more:
+          type: boolean
+        url:
+          type: string
+    refund:
+      type: object
+      required:
+        - id
+        - amount
+        - status
+      properties:
+        id:
+          type: string
+          readOnly: true
+        amount:
+          type: integer
+        charge:
+          type: string
+        created:
+          type: integer
+          readOnly: true
+        currency:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/metadata"
+        reason:
+          type: string
+          nullable: true
+          enum:
+            - duplicate
+            - fraudulent
+            - requested_by_customer
+        status:
+          type: string
+          enum:
+            - pending
+            - succeeded
+            - failed
+            - canceled
+    refund-list:
+      type: object
+      properties:
+        object:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/refund"
+        has_more:
+          type: boolean

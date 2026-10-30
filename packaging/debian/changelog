@@ -1,3 +1,20 @@
+guile-openapi-generator (0.1.0-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Install the launcher as /usr/bin/guile-openapi-generator, so the package
+    ships the command its documentation describes and not only modules.
+  * Install the new manual page.
+  * Run the suites with the Veritas environment they expect, and with
+    guile-curl available so the libcurl transport test really runs.
+  * Install the program through scripts/install-tree, the installer the Arch,
+    openSUSE and container recipes run as well, instead of a second copy of the
+    layout here.
+  * Add an autopkgtest that exercises the installed command end to end, and a
+    second one that checks the installed layout and its byte-compiled cache.
+  * Add a watch file, so uscan can find the release tags.
+
+ -- Josep Bigorra <jjbigorra@gmail.com>  Sat, 31 Oct 2026 12:00:00 +0100
+
 guile-openapi-generator (0.0.7-1) unstable; urgency=medium
 
   * Bump version for container and GNU/Linux packaging improvements.

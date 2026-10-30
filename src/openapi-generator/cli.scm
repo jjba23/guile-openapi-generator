@@ -17,7 +17,8 @@
 
 ;;; Commentary:
 ;;
-;; The command line: a thin shell around @code{(openapi-generator generator)}.
+;; The command line: a thin shell around @code{(openapi-generator generator)}
+;; and the two route readers.
 ;;
 ;; @example
 ;; guile -L src -- \
@@ -25,6 +26,12 @@
 ;;        (list "generate" "--input" "petstore.yaml" "--output" "gen"
 ;;              "--controllers" "artanis" "--http" "curl"))'
 ;; @end example
+;;
+;; There are two commands.  @code{generate} reads a specification and writes
+;; Guile; @code{spec} reads the routes of an existing Guile or Artanis server
+;; and writes an OpenAPI 3.0 document in YAML.  An invocation with no command
+;; word still means @code{generate}, because that was the only command the tool
+;; had for a while.
 ;;
 ;; Every option has a long and a short spelling, the defaults are the ones that
 ;; surprise least (plain Guile controllers, plain Guile client, models included),
@@ -44,15 +51,21 @@
   #:use-module (openapi-generator config)
   #:use-module (openapi-generator config-file)
   #:use-module (openapi-generator bundle)
+  #:use-module (openapi-generator routes)
+  #:use-module (openapi-generator guile-routes)
+  #:use-module (openapi-generator artanis-routes)
   #:export (main
             main!
             options
             usage
+            spec-options
+            spec-usage
             parse-backend
             parse-controllers
             parse-dependencies
             parse-resolution-mode
-            parse-auth-header))
+            parse-auth-header
+            parse-route-source))
 
 (define option-descriptions
   '((help . "Show this help and exit.")
@@ -116,12 +129,33 @@
     (fault-tolerant-enums)
     (non-null-response-payloads)))
 
-(define (usage port)
-  "Write the usage of the command to @var{port}."
-  (format port "guile-openapi-generator ~a~%~%" generator-version)
-  (format port "Read an OpenAPI 3.x specification and generate Guile code.~%~%")
-  (format port "Usage: openapi-generator generate --input SPEC --output DIR~%")
-  (format port "                          [options]~%~%")
+(define spec-option-descriptions
+  '((help . "Show this help and exit.")
+    (version . "Show the version and exit.")
+    (input . "The Guile or Artanis source file whose routes are read.")
+    (output . "The YAML file to write, or - for standard output.")
+    (source . "guile or artanis (default: guile).")
+    (title . "The info.title of the document (default: API).")
+    (api-version . "The info.version of the document (default: 1.0.0).")
+    (description . "The info.description of the document.")
+    (server . "A servers entry; repeatable.")))
+
+(define spec-options
+  '((help (single-char #\h))
+    (input (single-char #\i) (value #t))
+    (output (single-char #\o) (value #t))
+    (source (single-char #\s) (value #t))
+    (title (single-char #\t) (value #t))
+    (api-version (single-char #\V) (value #t))
+    (version (single-char #\v))
+    (description (value #t))
+    (server (value #t))))
+
+(define (write-option-table port descriptors descriptions)
+  "Write each option of @var{descriptors} with its entry of @var{descriptions}.
+
+The spelling and the explanation are separated by padding rather than by a tab,
+because a usage text is also read as plain text in a bug report."
   (for-each (lambda (option)
               (let* ((spelling (option-spelling option))
                      (padding (make-string (max 1
@@ -130,8 +164,19 @@
                 (format port "~a~a~a~%"
                         spelling
                         padding
-                        (or (assoc-ref option-descriptions (car option)) ""))))
-            options)
+                        (or (assoc-ref descriptions (car option)) ""))))
+            descriptors))
+
+(define (usage port)
+  "Write the usage of the command to @var{port}."
+  (format port "guile-openapi-generator ~a~%~%" generator-version)
+  (format port "Read an OpenAPI 3.x specification and generate Guile code,~%")
+  (format port "or read the routes of a server and write a specification.~%~%")
+  (format port "Usage: openapi-generator generate --input SPEC --output DIR~%")
+  (format port "                          [options]~%")
+  (format port "       openapi-generator spec --input ROUTES --output FILE~%")
+  (format port "                          [options]~%~%")
+  (write-option-table port options option-descriptions)
   (format port "~%Examples:~%")
   (format port
           "  openapi-generator generate -i petstore.yaml -o gen~%")
@@ -140,7 +185,37 @@
   (format port
           "  openapi-generator generate --config openapi-generator.yaml~%")
   (format port
-          "  openapi-generator generate -i api.yaml -o gen -t models,client~%"))
+          "  openapi-generator generate -i api.yaml -o gen -t models,client~%")
+  (format port
+          "  openapi-generator spec -i app/controllers.scm -o openapi.yaml~%")
+  (format port
+          "  openapi-generator spec -i app/routes.scm -s artanis -t 'My API'~%"))
+
+(define (spec-usage port)
+  "Write the usage of the @code{spec} command to @var{port}."
+  (format port "guile-openapi-generator ~a~%~%" generator-version)
+  (format port "Read the routes of a Guile or Artanis server and write an~%")
+  (format port "OpenAPI 3.0 document in YAML.~%~%")
+  (format port "Usage: openapi-generator spec --input ROUTES --output FILE~%")
+  (format port "                          [options]~%~%")
+  (write-option-table port spec-options spec-option-descriptions)
+  (format port "~%The guile source may be a route table written by this generator or~%")
+  (format port "plain (get \"/path\" handler) declarations; the artanis source may be~%")
+  (format port "any file that declares routes with the Artanis method macros.  Neither~%")
+  (format port "file is loaded: only the route forms are read.~%~%")
+  (format port "Examples:~%")
+  (format port
+          "  openapi-generator spec -i app/controllers.scm -o openapi.yaml~%")
+  (format port
+          "  openapi-generator spec -i app/routes.scm -s artanis -o openapi.yaml~%")
+  (format port
+          "  openapi-generator spec -i app/controllers.scm -o - | less~%")
+  (format port
+          "  openapi-generator spec -i app/routes.scm -t 'Pet store' \\~%")
+  (format port
+          "      --api-version 2.0.0~%")
+  (format port
+          "      --server https://api.example.com/v1~%"))
 
 (define (option-field option name)
   "Return the value of the @var{name} property of @var{option}, or @code{#f}.
@@ -324,8 +399,8 @@ when there is none, to the key itself."
            (format #f "~a" (car (cdr arguments))))
       (format #f "~a" key)))
 
-(define* (main #:optional (arguments (cdr (command-line))))
-  "Run the generator from the command line @var{arguments} and return an exit code.
+(define* (generate-main #:optional (arguments (cdr (command-line))))
+  "Run the @code{generate} command on @var{arguments} and return an exit code.
 
 The arguments start after the program name, and the first of them may be the
 word @code{generate}, which is accepted so that the invocation reads like the
@@ -483,6 +558,98 @@ written when it differs from the file."
                 "openapi-generator: ~a~%"
                 (exception-message key arguments))
         1))))
+
+(define (parse-route-source value)
+  "Return the route reader named by @var{value}.
+
+@code{guile} reads a plain Guile server's route table or declarations,
+@code{artanis} reads Artanis route forms.  An unknown name is an error, because a
+typo in @code{--source artanis} should not silently read the file as Guile and
+report that it has no routes."
+  (let ((reader (string->symbol
+                 (string-downcase (format #f "~a" (or value "guile"))))))
+    (if (memq reader '(guile artanis))
+        reader
+        (error (format #f
+                       "Unknown route source ~a; expected one of guile, artanis"
+                       value)))))
+
+(define (routes-from-source source input)
+  "Return the routes declared in the source file @var{input}, read as @var{source}."
+  (case source
+    ((guile) (guile-routes-from-file input))
+    ((artanis) (artanis-routes-from-file input))))
+
+(define* (spec-main arguments)
+  "Run the @code{spec} command on @var{arguments} and return an exit code.
+
+The command reads the routes of an existing server and writes an OpenAPI 3.0
+document in YAML.  @code{--output -} writes the document to standard output
+instead of a file, which is what a pipeline wants."
+  (let ((parsed (getopt-long (cons "openapi-generator spec" arguments)
+                             spec-options
+                             #:stop-at-first-non-option #t)))
+    (cond
+      ((option-ref parsed 'help #f)
+       (spec-usage (current-output-port))
+       0)
+      ((option-ref parsed 'version #f)
+       (format #t "guile-openapi-generator ~a~%" generator-version)
+       0)
+      (else
+       (let ((input (option-ref parsed 'input #f))
+             (output (option-ref parsed 'output "openapi.yaml"))
+             (title (option-ref parsed 'title "API"))
+             (version (option-ref parsed 'api-version "1.0.0"))
+             (description (option-ref parsed 'description #f))
+             (servers (collect-option-values arguments "--server")))
+         (unless input
+           (spec-usage (current-error-port))
+           (error "spec needs --input FILE"))
+         (let* ((source (parse-route-source (option-ref parsed 'source "guile")))
+                (routes (routes-from-source source input)))
+           (when (null? routes)
+             (error (format #f
+                            "No routes were found in ~a; is it a ~a source?"
+                            input
+                            source)))
+           (if (string=? output "-")
+               (display (routes->yaml routes
+                                      #:title title
+                                      #:version version
+                                      #:description description
+                                      #:servers servers))
+               (begin
+                 (routes->yaml-file routes
+                                    output
+                                    #:title title
+                                    #:version version
+                                    #:description description
+                                    #:servers servers)
+                 (format #t "specification: ~a~%" output)))
+           0))))))
+
+(define* (main #:optional (arguments (cdr (command-line))))
+  "Run the command line @var{arguments} and return an exit code.
+
+The first argument selects the command: @code{spec} reads routes out of source
+and writes a specification, and anything else — including the word
+@code{generate} — is the generator itself.  The @code{generate} spelling is
+accepted so that an invocation reads like the other task runners in this
+project, and because it is what older scripts pass.
+
+Both commands report an error as a one-line diagnostic and return status 1
+rather than letting a backtrace out; @code{main!} turns the status into the exit
+status of the process."
+  (if (and (pair? arguments) (string=? (car arguments) "spec"))
+      (catch #t
+        (lambda () (spec-main (cdr arguments)))
+        (lambda (key . arguments)
+          (format (current-error-port)
+                  "openapi-generator: ~a~%"
+                  (exception-message key arguments))
+          1))
+      (generate-main arguments)))
 
 (define* (main! #:optional (arguments (cdr (command-line))))
   "Run the generator as a command and exit with its status.

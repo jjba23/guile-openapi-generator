@@ -198,6 +198,18 @@ falls back to a latin-1 reading for the log rather than raising."
 
 ;;; Suites
 
+(define (curl-available?)
+  "Return @code{#t} when guile-curl can be loaded.
+
+The libcurl transport is generated code that imports @code{(curl)} at load time,
+so its end-to-end test needs the module the same way the generated tree does.  A
+build without it (a distribution package that does not want to depend on an
+optional transport, a container image) runs every other test and skips this one
+rather than failing with an unbound variable from a module that never loaded."
+  (catch #t
+    (lambda () (and (resolve-module '(curl) #:ensure #f) #t))
+    (lambda arguments #f)))
+
 (define runtime-suite
   (suite "Transport helpers"
          (test "A response header is read without case"
@@ -303,6 +315,7 @@ falls back to a latin-1 reading for the log rather than raising."
                            #f)))))))
 
          (test "The libcurl transport sends bytes, not a latin-1 round-trip"
+               #:skip? (not (curl-available?))
                (set! requests '())
                (with-server
                 (lambda (port)

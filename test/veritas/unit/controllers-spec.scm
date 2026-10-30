@@ -87,7 +87,10 @@
 
          (test "A request body is decoded into the record"
                (assert-true (contains? petstore-text
-                                       "(jso->new-pet (json-string->jso raw))")))
+                                       "(json-string->jso raw)")
+                            #:name "the body is parsed as JSON")
+               (assert-true (contains? petstore-text "(jso->new-pet node)")
+                            #:name "the parsed node becomes the record"))
 
          (test "The Artanis adapter registers one route per operation"
                (assert-equal #:expect 4

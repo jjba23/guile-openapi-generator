@@ -1,0 +1,7 @@
+Tests: command-line
+Depends: guile-openapi-generator
+Restrictions: allow-stderr
+
+Tests: installed-files
+Depends: guile-openapi-generator, guile-3.0
+Restrictions: allow-stderr

@@ -1,0 +1,414 @@
+# A faithful subset of the GitHub REST API around repository issues: the paths,
+# the parameters, the pagination headers and the error envelopes are the ones
+# the real service documents.  It is here so the generator, the YAML writer and
+# the route readers are exercised by a specification written for a real API
+# rather than for this test suite.
+openapi: 3.0.3
+info:
+  title: GitHub REST API (issues subset)
+  description: |
+    List, read and create the issues of a repository.
+
+    The endpoints require a token; the responses carry the rate-limit headers
+    GitHub sends.
+  version: "2022-11-28"
+  license:
+    name: MIT
+    url: https://docs.github.com/en/site-policy/licensing
+servers:
+  - url: https://api.github.com
+    description: The public instance
+security:
+  - bearerAuth: []
+tags:
+  - name: issues
+    description: Repository issues
+paths:
+  /repos/{owner}/{repo}/issues:
+    parameters:
+      - name: owner
+        in: path
+        required: true
+        description: The account owner of the repository.
+        schema:
+          type: string
+      - name: repo
+        in: path
+        required: true
+        description: The name of the repository.
+        schema:
+          type: string
+    get:
+      operationId: issues/list-for-repo
+      summary: List repository issues
+      description: List issues in a repository, most recently created first.
+      tags:
+        - issues
+      parameters:
+        - name: milestone
+          in: query
+          description: A milestone number, "*" for any, or "none".
+          schema:
+            type: string
+            nullable: true
+        - name: state
+          in: query
+          description: The issue state.
+          schema:
+            type: string
+            enum:
+              - open
+              - closed
+              - all
+            default: open
+        - name: labels
+          in: query
+          description: A comma-separated list of label names.
+          schema:
+            type: string
+        - name: per_page
+          in: query
+          description: Results per page.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 30
+        - name: page
+          in: query
+          description: The page of results to fetch.
+          schema:
+            type: integer
+            default: 1
+        - name: If-None-Match
+          in: header
+          description: An ETag from a previous response.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A list of issues
+          headers:
+            Link:
+              description: Pagination links.
+              schema:
+                type: string
+            X-RateLimit-Remaining:
+              description: Requests left in the current window.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/issue"
+        "304":
+          description: Not modified
+        "404":
+          $ref: "#/components/responses/notFound"
+        "401":
+          $ref: "#/components/responses/unauthorized"
+    post:
+      operationId: issues/create
+      summary: Create an issue
+      tags:
+        - issues
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/issue-create"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/issue"
+        "410":
+          description: The repository has issues disabled
+        "422":
+          $ref: "#/components/responses/validationFailed"
+  /repos/{owner}/{repo}/issues/{issue_number}:
+    parameters:
+      - name: owner
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: repo
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: issue_number
+        in: path
+        required: true
+        description: The number of the issue.
+        schema:
+          type: integer
+    get:
+      operationId: issues/get
+      summary: Get an issue
+      tags:
+        - issues
+      responses:
+        "200":
+          description: The issue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/issue"
+        "301":
+          description: Moved permanently
+        "404":
+          $ref: "#/components/responses/notFound"
+    patch:
+      operationId: issues/update
+      summary: Update an issue
+      tags:
+        - issues
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/issue-update"
+      responses:
+        "200":
+          description: The updated issue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/issue"
+        "422":
+          $ref: "#/components/responses/validationFailed"
+    delete:
+      operationId: issues/delete
+      summary: Delete an issue
+      description: Only users with push access can delete an issue.
+      tags:
+        - issues
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          $ref: "#/components/responses/notFound"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    basicAuth:
+      type: http
+      scheme: basic
+  responses:
+    notFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/basic-error"
+    unauthorized:
+      description: Requires authentication
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/basic-error"
+    validationFailed:
+      description: Validation failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/validation-error"
+  schemas:
+    basic-error:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+        documentation_url:
+          type: string
+        status:
+          type: string
+    validation-error:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              resource:
+                type: string
+              field:
+                type: string
+              code:
+                type: string
+    user:
+      type: object
+      required:
+        - login
+        - id
+      properties:
+        login:
+          type: string
+        id:
+          type: integer
+          readOnly: true
+        avatar_url:
+          type: string
+          format: uri
+        type:
+          type: string
+          enum:
+            - User
+            - Organization
+            - Bot
+          default: User
+    label:
+      type: object
+      required:
+        - name
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+        color:
+          type: string
+        default:
+          type: boolean
+          default: false
+    milestone:
+      type: object
+      nullable: true
+      properties:
+        number:
+          type: integer
+        title:
+          type: string
+        due_on:
+          type: string
+          format: date-time
+          nullable: true
+    issue:
+      type: object
+      required:
+        - id
+        - number
+        - title
+        - state
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        number:
+          type: integer
+          readOnly: true
+        title:
+          type: string
+        body:
+          type: string
+          nullable: true
+        state:
+          type: string
+          enum:
+            - open
+            - closed
+        state_reason:
+          type: string
+          nullable: true
+          x-extensible-enum:
+            - completed
+            - not_planned
+            - reopened
+        user:
+          $ref: "#/components/schemas/user"
+        labels:
+          type: array
+          items:
+            $ref: "#/components/schemas/label"
+        assignee:
+          allOf:
+            - $ref: "#/components/schemas/user"
+          nullable: true
+        milestone:
+          allOf:
+            - $ref: "#/components/schemas/milestone"
+          nullable: true
+        comments:
+          type: integer
+          default: 0
+        reactions:
+          type: object
+          additionalProperties:
+            type: integer
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        closed_at:
+          type: string
+          format: date-time
+          nullable: true
+    issue-create:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+        assignee:
+          type: string
+          nullable: true
+        milestone:
+          type: integer
+          nullable: true
+        labels:
+          type: array
+          items:
+            type: string
+    issue-update:
+      type: object
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+          nullable: true
+        state:
+          type: string
+          enum:
+            - open
+            - closed
+        state_reason:
+          type: string
+          enum:
+            - completed
+            - not_planned
+            - reopened
+          nullable: true
+        labels:
+          type: array
+          items:
+            type: string
+        assignee:
+          type: string
+          nullable: true
