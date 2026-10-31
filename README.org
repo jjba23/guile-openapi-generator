@@ -6,7 +6,7 @@
 #+options: toc:nil
 
 [[https://jointhefreeworld.org/ggg/dist/scheme-guile.svg]] [[https://jointhefreeworld.org/ggg/dist/gnu-guix.svg]] [[https://jointhefreeworld.org/ggg/dist/maak.svg]]
-[[https://jointhefreeworld.org/ggg/dist/license-agpl3+.svg]] [[https://jointhefreeworld.org/ggg/dist/license-fdl13+.svg]]
+[[https://jointhefreeworld.org/ggg/dist/license-mit.svg]] [[https://img.shields.io/badge/docs%20license-CC%20BY%204.0-2ea44f.svg]] [[https://img.shields.io/badge/CI-Byggsteg%20%7C%20GitHub-2ea44f.svg]]
 
 #+caption: A real =./run.sh demo= run from =examples/todo=.
 #+attr_html: :width 900 :alt Terminal demo: one command generates, serves, calls and stops the Todo API
@@ -1595,6 +1595,7 @@ guile-openapi-generator/
 ├── packaging/            the Arch, Debian and openSUSE recipes
 │   └── README.org         what every package installs, and the release steps
 ├── assets/               the animated demo and other README assets
+├── LICENSE               the MIT license
 ├── channels.scm          the pinned Guix revision
 ├── manifest.scm          the development environment
 ├── guix.scm              a package for the working tree
@@ -1775,19 +1776,22 @@ reasoning. A human stays in the loop for every change.
 :CUSTOM_ID: licensing
 :END:
 
-The generator and all of its source code are free software, licensed under the
-*GNU Affero General Public License v3* (or newer, at your convenience).
-
-https://www.gnu.org/licenses/agpl-3.0.html
+The generator, this repository and all of its source code are free and open
+software, licensed under the [[https://opensource.org/license/mit][MIT License]].
+The full text is in the =LICENSE= file, and every source file says the same in
+its own header, as an =SPDX-License-Identifier: MIT= line.  The packages say so
+too: the Debian copyright file, the Arch =license= array, the RPM =License:=
+field and the container image's =org.opencontainers.image.licenses= label all
+name MIT.  Code the generator writes for you is yours: the banner it puts on a
+generated file is a paragraph you supply (see =#:header-text=), not a licence
+claim.
 
 The documentation and examples provided with this project, including this
-document, are licensed under the *GNU Free Documentation License v1.3* (or newer,
-at your convenience).
+document, are licensed under the
+[[https://creativecommons.org/licenses/by/4.0/][CC BY 4.0 (Creative Commons Attribution)]] license.
 
-https://www.gnu.org/licenses/fdl-1.3.html
-
-In SPDX terms: =AGPL-3.0-or-later= for the code, =FDL-1.3-or-later= for the
-documentation and examples.
+In SPDX terms: =MIT= for the code, =CC-BY-4.0= for the documentation and
+examples.
 
 * Credits
 :PROPERTIES:

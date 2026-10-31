@@ -23,7 +23,7 @@ Name:           guile-openapi-generator
 Version:        0.1.0
 Release:        0
 Summary:        OpenAPI 3 to Guile Scheme code generator
-License:        AGPL-3.0-or-later
+License:        MIT
 URL:            https://codeberg.org/jjba23/guile-openapi-generator
 Source0:        %{name}-%{version}.tar.gz
 BuildRequires:  pkgconfig(guile-3.0)
@@ -75,7 +75,7 @@ VERITAS_RUN_BENCHMARKS=false \
 guile -L ./src -L ./test -c '(exit ((@ (veritas runner) run-tests)))'
 
 %files
-%license COPYING
+%license LICENSE
 %doc README.org
 %{_bindir}/guile-openapi-generator
 %{_mandir}/man1/guile-openapi-generator.1%{?ext_man}

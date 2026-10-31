@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1.7
 
-# guile-openapi-generator -- OpenAPI 3 to Guile Scheme code generator
+# guile-openapi-generator - OpenAPI 3 to Guile Scheme code generator
 #
-# SPDX-License-Identifier: AGPL-3.0-or-later
-# Copyright © 2026 Josep Bigorra <jjbigorra@gmail.com>
+# SPDX-License-Identifier: MIT
+# Copyright © Josep Bigorra <jjbigorra@gmail.com>
 #
 # The image installs the same tree the distribution recipes install, and it
 # gets it from the same place: scripts/install-tree, which asks Guile where the
@@ -47,7 +47,7 @@ RUN --mount=type=cache,target=/var/cache/zypp \
 COPY src/ ./src/
 COPY scripts/ ./scripts/
 COPY man/ ./man/
-COPY COPYING README.org ./
+COPY LICENSE README.org ./
 
 # ------------------------------------------------------------------------------
 # Install into a staging root
@@ -65,7 +65,7 @@ RUN set -eu; \
     root=/tmp/root; \
     rm -rf "$root"; \
     sh scripts/install-tree --destdir "$root"; \
-    install -Dm644 COPYING "$root/usr/share/doc/guile-openapi-generator/COPYING"; \
+    install -Dm644 LICENSE "$root/usr/share/doc/guile-openapi-generator/LICENSE"; \
     install -Dm644 README.org "$root/usr/share/doc/guile-openapi-generator/README.org"; \
     echo "==> Staged files"; \
     ls -R "$root"
@@ -135,7 +135,7 @@ LABEL org.opencontainers.image.title="guile-openapi-generator" \
       org.opencontainers.image.description="OpenAPI 3 to Guile Scheme code generator" \
       org.opencontainers.image.url="https://codeberg.org/jjba23/guile-openapi-generator" \
       org.opencontainers.image.source="https://codeberg.org/jjba23/guile-openapi-generator" \
-      org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+      org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}"
 
 # ------------------------------------------------------------------------------

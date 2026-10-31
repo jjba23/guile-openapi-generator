@@ -1,19 +1,7 @@
-;; guile-openapi-generator
-
+;; guile-openapi-generator - OpenAPI 3 to Guile Scheme code generator
+;;
+;; SPDX-License-Identifier: MIT
 ;; Copyright © Josep Bigorra <jjbigorra@gmail.com>
-
-;; guile-openapi-generator is free software: you can redistribute it and/or modify
-;; it under the terms of the GNU Affero General Public License as published by
-;; the Free Software Foundation, either version 3 of the License, or
-;; (at your option) any later version.
-
-;; guile-openapi-generator is distributed in the hope that it will be useful,
-;; but WITHOUT ANY WARRANTY; without even the implied warranty of
-;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-;; GNU Affero General Public License for more details.
-
-;; You should have received a copy of the GNU Affero General Public License
-;; along with guile-openapi-generator.  If not, see <https://www.gnu.org/licenses/>.
 
 ;;; Commentary:
 ;;
@@ -61,6 +49,6 @@ JSON and generates Guile Scheme code: validated record data models, controllers
 support for polymorphism, enumerations, JSON merge patch and the security
 schemes described by the specification.")
     (home-page "https://codeberg.org/jjba23/guile-openapi-generator")
-    (license license:agpl3+)))
+    (license license:expat)))
 
 guile-openapi-generator
