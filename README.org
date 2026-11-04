@@ -8,6 +8,9 @@
 [[https://jointhefreeworld.org/ggg/dist/scheme-guile.svg]] [[https://jointhefreeworld.org/ggg/dist/gnu-guix.svg]] [[https://jointhefreeworld.org/ggg/dist/maak.svg]]
 [[https://jointhefreeworld.org/ggg/dist/license-mit.svg]] [[https://img.shields.io/badge/docs%20license-CC%20BY%204.0-2ea44f.svg]] [[https://img.shields.io/badge/CI-Byggsteg%20%7C%20GitHub-2ea44f.svg]]
 
+#+attr_html: :width 160 :alt Guile OpenAPI Generator logo
+[[file:logo.svg]]
+
 #+caption: A real =./run.sh demo= run from =examples/todo=.
 #+attr_html: :width 900 :alt Terminal demo: one command generates, serves, calls and stops the Todo API
 [[file:assets/demo.gif]]
@@ -62,7 +65,6 @@ continue with a lot of motivation.
 (pet->jso rex)                     ;; => (("id" . 7) ("name" . "Rex") ("status" . "sold"))
 (pet-valid? rex)                   ;; => #t
 #+end_src
-
 
 #+TOC: headlines 1
 
@@ -260,7 +262,6 @@ The part all four share is testable on any machine: ~maak package-smoke= install
 - *Nix* if the rest of your machine is already declarative; this flake does not carry the project yet, but the container image and the recipes below do.
 - *Container* if you only want to try the release, or reproduce a report on a machine that has nothing installed.
 - *Distribution package* if you want the project managed by the same tool as the rest of your system, with its licence, manual page and launcher in the usual places.
-
 
 * Install
 :PROPERTIES:
