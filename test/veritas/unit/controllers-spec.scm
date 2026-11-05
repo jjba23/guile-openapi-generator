@@ -34,6 +34,9 @@
 (define artanis-text
   (emit-artanis-controllers (petstore-spec) (test-config #:root "petstore")))
 
+(define params-text
+  (emit-controllers (fixture-spec "params.yaml") (test-config #:root "params")))
+
 ;;; Suites
 
 (define text-suite
@@ -114,6 +117,23 @@
                              #:got (lines (controllers-program 'e2e-controllers
                                                               "controllers-handlers"))))))
 
+(define parameter-suite
+  (suite "Parameter serialization"
+         (test "An array query parameter is decoded with its style"
+               (assert-true
+                (contains? params-text
+                           "(cons 'tags (query-parameter-value (http-request-query request) \"tags\" 'form #f 'array 'string))")))
+
+         (test "A deepObject query parameter is decoded back into an alist"
+               (assert-true
+                (contains? params-text
+                           "(cons 'filter (query-parameter-value (http-request-query request) \"filter\" 'deepObject #t 'object 'string))")))
+
+         (test "A cookie parameter is read out of the Cookie header"
+               (assert-true
+                (contains? params-text
+                           "(cons 'session (cookie-value (http-request-header request \"Cookie\") \"session\"))")))))
+
 (define (spec)
   (veritas-run #:concurrent? #f
-               text-suite behaviour-suite))
+               text-suite behaviour-suite parameter-suite))

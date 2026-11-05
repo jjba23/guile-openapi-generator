@@ -1,0 +1,339 @@
+#+title: Reference and development
+#+subtitle: Guile OpenAPI Generator
+#+options: toc:t
+
+[[file:index.org][<- Documentation home]]
+
+* Reference
+:PROPERTIES:
+:CUSTOM_ID: reference
+:END:
+
+The modules that are meant to be used from your own code, and the entry point of
+each.  Everything documented here is supported; the internal helpers each module
+keeps to itself are not.
+
+| Module                            | Entry points                                                                 |
+|-----------------------------------+------------------------------------------------------------------------------|
+| =(openapi-generator)=             | =generate=, =generate-from-file=, =generate-from-string=, =read-spec-file=, =parse-spec= |
+| =(openapi-generator spec)=        | =parse-spec=, the =<spec>= / =<operation>= / =<parameter>= / =<response>= records, =operation-response-for-status=, =parameters-by-location= |
+| =(openapi-generator schema)=      | =schema-shape=, the =<shape>= record and its accessors (=shape-kind=, =shape-properties=, =shape-branches=, =shape-items=…) |
+| =(openapi-generator naming)=      | =identifier=, =record-name=, =accessor-name=, =operation-procedure-name=, =parse-operation-id-transform= |
+| =(openapi-generator models)=      | =emit-models=, =make-context=, =unbox-expression=, =box-expression=           |
+| =(openapi-generator controllers)= | =emit-controllers=, =emit-artanis-controllers=                               |
+| =(openapi-generator client)=      | =emit-client=                                                                |
+| =(openapi-generator config)=      | =make-config= and the =config= accessors                                     |
+| =(openapi-generator generator)=   | =generate=, =generate-from-file=, =generate-from-string=                    |
+| =(openapi-generator routes)=      | =route=, =parameter=, =request-body=, =response=, =routes->document=, =routes->yaml=, =routes->yaml-file= |
+| =(openapi-generator guile-routes)= | =guile-routes-from-file=, =guile-routes-from-string=, =guile-routes-from-forms=, =regexp->path= |
+| =(openapi-generator artanis-routes)= | =artanis-routes-from-file=, =artanis-routes-from-string=, =artanis-routes-from-forms= |
+| =(openapi-generator yaml)=        | =yaml-string->scm=, =yaml-file->scm=, =yaml-available?=                          |
+| =(openapi-generator yaml-writer)= | =jso->yaml-string=, =jso->yaml-file=                                           |
+| =(openapi-generator jso)=         | =jso-ref=, =jso-ref-path=, =jso-merge=, =jso-normalize=, =json-merge-patch=      |
+| =(openapi-generator runtime)=     | what generated code links against: =ok=, =created=, =expect-status=, =make-auth=, =authenticate=, =params->path=, the =<http-request>= and =<http-response>= records |
+| =(openapi-generator cli)=         | =main!=                                                                      |
+
+A specification in memory is the shortest path from a document to a decision:
+
+#+begin_src scheme
+(use-modules (openapi-generator spec)
+             (openapi-generator yaml)
+             (openapi-generator controllers))
+
+(define spec (parse-spec (yaml-file->scm "openapi.yaml")))
+
+;; What does the API offer?
+(map (lambda (operation)
+       (format #f "~a ~a" (operation-method operation) (operation-path operation)))
+     (spec-operations spec))
+
+;; What does one operation accept, and what does it answer?
+(let ((operation (car (spec-operations spec))))
+  (map parameter-name (operation-parameters operation))
+  (response-status (operation-success-response operation)))
+
+;; Or skip the parse and hand the document to a run:
+(generate #:document (yaml-file->scm "openapi.yaml") #:output "gen")
+#+end_src
+
+The emitters are public too — =emit-models=, =emit-controllers=,
+=emit-artanis-controllers= and =emit-client= take a =<spec>= and a =<config>=
+and return the text — but building a =<config>= by hand is more ceremony than
+=generate=, so reach for them only when a program needs the text itself.
+
+* Development
+:PROPERTIES:
+:CUSTOM_ID: development
+:END:
+
+Contributions of every size are welcome — a typo fix, a fixture specification
+that trips the generator, or a whole feature. Nothing here is precious, and the
+project is better when more people have read it.
+
+** Repository layout
+:PROPERTIES:
+:CUSTOM_ID: repository-layout
+:END:
+
+#+begin_example
+guile-openapi-generator/
+├── src/openapi-generator.scm        the public facade, (openapi-generator)
+├── src/openapi-generator/
+│   ├── yaml.scm          the YAML reader, in Scheme
+│   ├── json.scm          JSON through guile-json
+│   ├── jso.scm           the shared value representation, and merge patch
+│   ├── reader.scm        format detection, fetching and OpenAPI 3.x validation
+│   ├── config-file.scm   options read from a YAML/JSON config file
+│   ├── json-schema.scm   a JSON Schema document wrapped as OpenAPI
+│   ├── bundle.scm        external $ref resolution into one document
+│   ├── transforms.scm    opt-in document rewrites (extensible enums)
+│   ├── spec.scm          operations, parameters, responses, security
+│   ├── schema.scm        what a schema means: records, enums, unions, maps
+│   ├── naming.scm        specification names -> Scheme names
+│   ├── config.scm        what a generation run is configured with
+│   ├── code.scm          the code writer: forms in, indented Scheme out
+│   ├── emitter.scm       the older writer, still used by the controllers module
+│   ├── models.scm        the models module
+│   ├── controllers.scm   the controllers module and the Artanis adapter
+│   ├── client.scm        the HTTP client, plain Guile or libcurl
+│   ├── generator.scm     the driver: read, generate, write
+│   ├── yaml-writer.scm   the YAML writer, the reader's other half
+│   ├── routes.scm        routes in Scheme, and the document they become
+│   ├── guile-routes.scm  a Guile server's route table read back
+│   ├── artanis-routes.scm  Artanis route declarations read back
+│   ├── runtime.scm       what generated code links against
+│   └── cli.scm           the command line
+├── test/veritas/unit/    the Veritas suites, one per module
+├── test/fixtures/        specifications and the programs the tests run
+│   ├── real/             subsets of the GitHub, Stripe and Kubernetes APIs
+│   ├── routes/           a Guile server and an Artanis app, as input to read
+│   └── programs/         the programs the generated-code tests run
+├── examples/             runnable specifications
+│   ├── petstore.yaml      the specification used in the quick start
+│   └── todo/              a complete app: spec, handlers, client, run.sh
+├── scripts/              the launcher the packages install, and the installer
+│                         every recipe runs
+├── man/                  the manual page
+├── packaging/            the Arch, Debian and openSUSE recipes
+│   └── README.org         what every package installs, and the release steps
+├── assets/               the animated demo and other README assets
+├── LICENSE               the MIT license
+├── channels.scm          the pinned Guix revision
+├── manifest.scm          the development environment
+├── guix.scm              a package for the working tree
+└── maak.scm              the developer tasks
+#+end_example
+
+The animation at the top lives in =assets/demo.gif= and is rendered from the
+Todo demo; if you change the demo's output, update the asset in the same change.
+
+** How the generator is written
+:PROPERTIES:
+:CUSTOM_ID: how-the-generator-is-written
+:END:
+
+Generated code is *data*, not text. Every emitter builds the s-expressions it
+wants with quasiquote and hands them to =(openapi-generator code)=, which decides
+indentation, where a line breaks, how arguments line up, and how a docstring is
+quoted:
+
+#+begin_src scheme
+;; src/openapi-generator/client.scm — one operation, as a form
+`(define* (,name client #:key ,@(parameter-declarations operation))
+   ,(client-docstring operation shape)
+   (receive (auth-headers auth-query)
+       (authenticate auth api-security-schemes ,(quoted security))
+     (let ((path ,(path-expression operation)))
+       (let ((response (client-send client ,(quoted method) path
+                                    ,@(send-arguments ctx operation))))
+         (expect-status response ,(quoted statuses))
+         (values ,decode response)))))
+#+end_src
+
+If you are adding a generator, add forms; if you need a new layout rule, add it
+to =code.scm= with a test in =test/veritas/unit/code-spec.scm= so every module
+benefits from it.
+
+** Tasks
+:PROPERTIES:
+:CUSTOM_ID: tasks
+:END:
+
+Everything developer-facing goes through [[https://codeberg.org/jjba23/maak][maak]] and the pinned environment:
+
+| Task            | What it does                                                                            |
+|-----------------+-----------------------------------------------------------------------------------------|
+| =maak test=     | Run every Veritas suite                                                                 |
+| =maak check=    | Compile every source and test module (generated trees and fixture programs are skipped) |
+| =maak generate= | Generate a client, controllers and models from =examples/petstore.yaml=                 |
+| =maak fmt=      | Format every =.scm= file with =guix style=                                              |
+| =maak docs=     | Generate the HTML API documentation                                                     |
+| =maak dev=      | Re-run the tests whenever a source, fixture or spec changes                             |
+| =maak package-smoke=   | Install into =dist/root= with the shared installer, then run both commands       |
+| =maak package-tar=     | Write the last commit as =dist/guile-openapi-generator-VERSION.tar.gz=           |
+| =maak package-zip=     | The same commit as a zip, under a =name-version/= prefix                          |
+| =maak package-deb=     | Build the Debian package (unsigned) from =packaging/debian=                      |
+| =maak package-rpm=     | Build the RPM with =rpmbuild= from =packaging/opensuse=                           |
+| =maak package-arch=    | Build the Arch package with =makepkg= from =packaging/arch=                       |
+| =maak package-docker=  | Build the image tagged with the version and =latest=                             |
+| =maak container-build= | Build the container image tagged =latest=                                        |
+| =maak container-run=   | Run the container image                                                          |
+| =maak clean=    | Remove generated artefacts                                                              |
+| =maak=          | List all tasks                                                                          |
+
+Without maak, the tests are one command:
+
+#+begin_src shell
+guix shell guile guile-json guile-curl guile-fibers -- \
+  guile -L ./src -L ./test -c '((@ (veritas runner) run-tests))'
+#+end_src
+
+** Tests
+:PROPERTIES:
+:CUSTOM_ID: tests
+:END:
+
+Twenty-one Veritas suites, more than seven hundred assertions, in four layers:
+
+- *Reading and writing*: the YAML reader (scalars, collections, block scalars,
+  anchors, markers) and the YAML writer against it — every value it writes is
+  read back and compared, because a quoted string in YAML means what the reader
+  says it means, not what the writer intended; the value representation and merge
+  patch; format detection; and the specification model.
+- *Meaning*: names, the schema IR (composition, unions, enumerability,
+  nullability), and the runtime the generated code calls.
+- *Generated code*: the text of what is emitted, and then the real thing — each
+  suite generates a tree into =test/generated/…=, runs a small program against it
+  in a fresh Guile process, and asserts on what it printed. That is how the tests
+  check that a constructor validates, that a union picks the right record, that a
+  merge patch removes a member, and that the client really speaks HTTP to a server
+  started by the test.
+- *The other direction*: the route model and the document it becomes, the Guile
+  and Artanis readers, and the =spec= command end to end — the document a reader
+  produces is always read back with =parse-spec=, because a specification this
+  project could not parse would be of no use whatever it looked like.
+
+  An *integration* suite closes the loop over a whole file rather than a fragment:
+  =test/fixtures/library.yaml= is read from start to finish, every module is
+  generated, the records are used to check that arrays, inexact multiples, bare
+  objects and extension members keep their data, the dispatcher is run against
+  the full route table, and the generated client calls a server for real.
+
+  An *input* suite covers where a document comes from: JSON Schema conversion,
+  API fragments, external references (including cycles) and a remote
+  specification fetched with authentication.
+
+  A *directional* suite covers what a model means in each direction: request and
+  response sets, readOnly/writeOnly exclusion, extensible and fault-tolerant
+  enumerations, and a discriminator inherited from a composition parent.
+
+  A *media* suite runs the generated client and dispatcher across JSON, text,
+  bytes, forms, multipart and declared response headers, with both the plain
+  Guile and libcurl transports, and checks content negotiation, form and
+  multipart coercion and the non-null payload option.
+
+  A *real-world* suite is the one that decides whether any of the above matters.
+  =test/fixtures/real/= holds subsets of the GitHub, Stripe and Kubernetes APIs
+  written the way those APIs are actually described — dotted schema names,
+  composition, unions, maps, form bodies, cursor pagination, response envelopes,
+  three JSON content types on one Kubernetes operation.  The suite asserts what
+  each document parses into, generates every tree and loads it in a child
+  process, dispatches the three Kubernetes patch media types once each, round
+  trips each document through the YAML writer, and reads the generated
+  controllers back into the same operations: specification to code to routes to
+  specification, with nothing hand-written in between.  It found two real bugs
+  the synthetic fixtures had missed — a converter named for schemas that have no
+  record, and a content-type test that could not tell =+json= types apart.
+
+The generated trees are left in place, because a failing test should be
+inspectable; they are git-ignored.
+
+Because the renderer is shared, a layout change is worth its own test in
+=code-spec.scm=: it is the one place where "the generated code looks right" is
+decided.
+
+** Contributing
+:PROPERTIES:
+:CUSTOM_ID: contributing
+:END:
+
+The short version:
+
+1. Fork, branch, and make one change that does one thing.
+2. Add a test. If the change is about a specification feature, add a fixture that
+   uses it — the fixtures double as documentation of what is supported.
+3. Run =maak test= and =maak check=.
+4. Open a pull request that says *why*, not just *what*.
+
+Good first contributions:
+
+- a specification that the generator reads but generates badly — attach the
+  smallest fragment that shows it;
+- a fixture under =test/fixtures/= for an OpenAPI feature that is not covered;
+- a language server or editor integration that uses the library;
+- documentation: an example of a real API you generated a client for.
+
+Bug reports are most useful with the specification, the command you ran, and what
+came out; the generated tree is inspectable on purpose, so please attach it.
+Patches are reviewed on the merits, and reviews are kind — see the AI policy
+below for how changes are expected to be understood by a human.
+
+If you are unsure where to start, open an issue on
+[[https://codeberg.org/jjba23/guile-openapi-generator/issues][Codeberg]] and say
+hello.  A question is a contribution too: it tells us where the documentation is
+still doing too much work.
+
+* AI policy
+:PROPERTIES:
+:CUSTOM_ID: ai-policy
+:END:
+
+This project follows the
+[[https://jointhefreeworld.org/blog/articles/personal/jointhefreeworld-ai-policy/index.html][jointhefreeworld AI policy]]:
+AI should assist human creativity and problem solving, never replace human
+reasoning. A human stays in the loop for every change.
+
+* Licensing
+:PROPERTIES:
+:CUSTOM_ID: licensing
+:END:
+
+The generator, this repository and all of its source code are free and open
+software, licensed under the [[https://opensource.org/license/mit][MIT License]].
+The full text is in the =LICENSE= file, and every source file says the same in
+its own header, as an =SPDX-License-Identifier: MIT= line.  The packages say so
+too: the Debian copyright file, the Arch =license= array, the RPM =License:=
+field and the container image's =org.opencontainers.image.licenses= label all
+name MIT.  Code the generator writes for you is yours: the banner it puts on a
+generated file is a paragraph you supply (see =#:header-text=), not a licence
+claim.
+
+The documentation and examples provided with this project, including this
+document, are licensed under the
+[[https://creativecommons.org/licenses/by/4.0/][CC BY 4.0 (Creative Commons Attribution)]] license.
+
+In SPDX terms: =MIT= for the code, =CC-BY-4.0= for the documentation and
+examples.
+
+* Credits
+:PROPERTIES:
+:CUSTOM_ID: credits
+:END:
+
+- [[https://www.gnu.org/software/guile/][GNU Guile]] — the language, its records, parameters and ports.
+- [[https://github.com/aconchillo/guile-json][guile-json]] — JSON reading and writing.
+- [[https://codeberg.org/jjba23/veritas][Veritas]] — the test and benchmark runner.
+- [[https://codeberg.org/jjba23/maak][maak]] — the task runner.
+- [[https://guix.gnu.org/][GNU Guix]] — reproducible environments.
+- The idea of reading a specification to generate typed code, and many of the
+  decisions about what to generate, come from
+  [[https://github.com/cjbooms/fabrikt][fabrikt]].
+
+* Thank you
+:PROPERTIES:
+:CUSTOM_ID: thank-you
+:END:
+
+Thank you for reading this far.  If you generate something with this project —
+a client, a server, a tiny internal tool — I would love to hear about it.  Open
+an issue, send a patch, or just say hello.  Happy hacking! 🐑

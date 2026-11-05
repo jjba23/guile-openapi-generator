@@ -102,6 +102,11 @@
             not-found
             uri-encode
             query-string
+            query-parameter-entries
+            query-parameter-value
+            cookie-value
+            cookie-string
+            merge-cookie-headers
             form-string
             coerce-form-values
             parse-query
@@ -407,6 +412,65 @@ to spell them: @code{(web client)} wants symbols and libcurl wants an
   "Return the header @var{name} of @var{request}."
   (header-ref (http-request-headers request) name))
 
+;;; Commentary:
+;;; Cookies
+;;
+;; A cookie parameter is not a header with the parameter's own name: it is one
+;; member of the Cookie header, and reading one back means finding it among the
+;; members.  These procedures are the only place that knows the syntax.
+
+(define (cookie-value header name)
+  "Return the value of the cookie @var{name} in the Cookie @var{header}, or #f."
+  (and (string? header)
+       (let loop ((parts (string-split header #\;)))
+         (if (null? parts)
+             #f
+             (let* ((part (string-trim-both (car parts)))
+                    (equals (string-index part #\=)))
+               (if (and equals
+                        (string=? (string-trim-both
+                                   (substring part 0 equals))
+                                  name))
+                   (cookie-unquote
+                    (string-trim-both
+                     (substring part (+ equals 1) (string-length part))))
+                   (loop (cdr parts))))))))
+
+(define (cookie-unquote value)
+  "Return @var{value} without the quotes a cookie value may carry."
+  (if (and (> (string-length value) 1)
+           (char=? (string-ref value 0) #\")
+           (char=? (string-ref value (- (string-length value) 1)) #\"))
+      (substring value 1 (- (string-length value) 1))
+      value))
+
+(define (cookie-string cookies)
+  "Return @var{cookies}, an alist of name to value, as a Cookie header value."
+  (string-join
+   (filter-map (lambda (entry)
+                 (let ((value (query-value-string (cdr entry))))
+                   (and value (format #f "~a=~a" (car entry) value))))
+               cookies)
+   "; "))
+
+(define (merge-cookie-headers headers)
+  "Return @var{headers} with every Cookie header folded into one.
+
+Credentials and cookie parameters both express themselves as cookies, and a
+request carrying two Cookie headers is not what either of them meant.  The
+values are joined in the order the entries were added."
+  (let* ((cookie? (lambda (entry)
+                    (string-ci=? (header-name-string (car entry)) "Cookie")))
+         (cookies (filter cookie? headers)))
+    (if (null? cookies)
+        headers
+        (cons (cons "Cookie"
+                    (string-join (map (lambda (entry)
+                                        (format #f "~a" (cdr entry)))
+                                      cookies)
+                                 "; "))
+              (remove cookie? headers)))))
+
 (define (http-request-query-ref request name)
   "Return the query parameter @var{name} of @var{request}."
   (let ((entry (assoc name (http-request-query request))))
@@ -561,6 +625,151 @@ Booleans are spelled the way a URL spells them, not the way Scheme prints them:
                             '()))))))
                parameters)
    "&"))
+
+;;; Commentary:
+;;; Parameter serialization
+;;
+;; A query parameter of an array or object type is spread over the query string
+;; in one of the styles the specification names, so building and reading one are
+;; two halves of the same rule and live next to each other.
+
+(define (parameter-style-name style)
+  "Return @var{style}, a string or symbol, as a symbol; @code{form} if absent."
+  (cond
+    ((symbol? style) style)
+    ((string? style) (string->symbol style))
+    (else 'form)))
+
+(define (query-delimiter style)
+  "Return the character that separates the items of @var{style}."
+  (let ((name (parameter-style-name style)))
+    (cond
+      ((memq name '(spaceDelimited space-delimited)) #\space)
+      ((memq name '(pipeDelimited pipe-delimited)) #\|)
+      (else #\,))))
+
+(define (query-parameter-entries name value style explode?)
+  "Return the query string entries that carry @var{value} for @var{name}.
+
+@var{style} is the OpenAPI serialization style of the parameter and
+@var{explode?} says whether a list or an object is written one member at a time.
+The result is a list, so a caller can splice several parameters into one query."
+  (let ((style (parameter-style-name style)))
+    (cond
+      ((or (eq? value #f) (json-null? value)) '())
+      ((and (list? value) (every pair? value))
+       (if (memq style '(deepObject deep-object))
+           (filter-map (lambda (entry)
+                         (let ((text (query-value-string (cdr entry))))
+                           (and text
+                                (cons (format #f "~a[~a]" name (car entry))
+                                      text))))
+                       value)
+           (if (and (eq? style 'form) explode?)
+               (filter-map (lambda (entry)
+                             (let ((text (query-value-string (cdr entry))))
+                               (and text (cons (car entry) text))))
+                           value)
+               (list (cons name
+                           (string-join
+                            (filter-map
+                             (lambda (entry)
+                               (append-map (lambda (part)
+                                             (let ((text (query-value-string part)))
+                                               (if text (list text) '())))
+                                           (list (car entry) (cdr entry))))
+                             value)
+                            (string (query-delimiter style))))))))
+      ((list? value)
+       (if (and (eq? style 'form) explode?)
+           (filter-map (lambda (element)
+                         (let ((text (query-value-string element)))
+                           (and text (cons name text))))
+                       value)
+           (list (cons name
+                       (string-join (filter-map query-value-string value)
+                                    (string (query-delimiter style)))))))
+      (else
+       (let ((text (query-value-string value)))
+         (if text (list (cons name text)) '()))))))
+
+(define (coerce-query-value text type)
+  "Return @var{text} as @var{type} when it parses, else @var{text} itself.
+
+Leaving an unparseable value alone is deliberate: the record validator reports
+it by field name instead of a coercion helper inventing a value."
+  (case type
+    ((integer number)
+     (or (and (string? text) (string->number text)) text))
+    ((boolean)
+     (let ((lowered (string-downcase (format #f "~a" (or text "")))))
+       (cond
+         ((member lowered '("true" "1" "yes" "on")) #t)
+         ((member lowered '("false" "0" "no" "off" "")) #f)
+         (else text))))
+    (else text)))
+
+(define (query-parameter-value query name style explode? kind item-type)
+  "Return the value of query parameter @var{name} in @var{query}, decoded.
+
+@var{kind} is @code{array}, @code{object} or @code{scalar} and @var{item-type}
+coerces each item.  An array becomes a list, an object an alist, a scalar a
+single value; @code{#f} means the parameter was not sent at all."
+  (let* ((style (parameter-style-name style))
+         (matching (filter (lambda (entry)
+                             (and (string? (car entry))
+                                  (string=? (car entry) name)))
+                           query))
+         (coerce (lambda (text) (coerce-query-value text item-type))))
+    (case kind
+      ((array)
+       (if (null? matching)
+           #f
+           (if explode?
+               (map (lambda (entry) (coerce (cdr entry))) matching)
+               (let ((items (append-map
+                             (lambda (entry)
+                               (string-split (or (cdr entry) "")
+                                             (query-delimiter style)))
+                             matching)))
+                 (if (null? items) #f (map coerce items))))))
+      ((object)
+       (if (memq style '(deepObject deep-object))
+           (let* ((prefix (string-append name "["))
+                  (members (filter-map
+                            (lambda (entry)
+                              (let ((key (car entry)))
+                                (and (string-prefix? prefix key)
+                                     (string-suffix? "]" key)
+                                     (cons (substring key (string-length prefix)
+                                                      (- (string-length key) 1))
+                                           (coerce (cdr entry))))))
+                            query)))
+             (if (null? members) #f members))
+           ;; An exploded object occupies the query under its own member names,
+           ;; so there is nothing to say which object they belong to; only the
+           ;; un-exploded spelling can be read back.
+           (if (or (null? matching) explode?)
+               #f
+               (let ((parts (append-map
+                             (lambda (entry)
+                               (string-split (or (cdr entry) "")
+                                             (query-delimiter style)))
+                             matching)))
+                 (let loop ((rest parts) (result '()))
+                   (cond
+                     ((or (null? rest) (null? (cdr rest)))
+                      (if (null? result) #f (reverse result)))
+                     (else
+                      (loop (cddr rest)
+                            (cons (cons (car rest) (coerce (cadr rest)))
+                                  result)))))))))
+      (else
+       (let ((entry (find (lambda (candidate)
+                            (and (string? (car candidate))
+                                 (string=? (car candidate) name)))
+                          query)))
+         (and entry (coerce (cdr entry))))))))
 
 (define (form-value-string value)
   "Return VALUE the way an application/x-www-form-urlencoded body spells it.

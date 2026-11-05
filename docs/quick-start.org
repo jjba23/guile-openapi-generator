@@ -1,0 +1,134 @@
+#+title: Quick start
+#+subtitle: Guile OpenAPI Generator
+#+options: toc:t
+
+[[file:index.org][<- Documentation home]]
+
+* Quick start
+:PROPERTIES:
+:CUSTOM_ID: quick-start
+:END:
+
+Sixty seconds from a specification to running code.  All commands below assume
+you are in the root of a checkout of this repository.
+
+** Generate
+:PROPERTIES:
+:CUSTOM_ID: generate
+:END:
+
+#+begin_src shell
+guile -L ./src -c '((@ (openapi-generator cli) main!)
+                    (list "generate" "--input" "examples/petstore.yaml"
+                          "--output" "gen" "--module" "petstore"))'
+#+end_src
+
+That writes
+
+#+begin_example
+gen/petstore/models.scm        records, validations, converters
+gen/petstore/controllers.scm   route table and dispatcher
+gen/petstore/client.scm        one procedure per operation
+gen/petstore/README.org        what was generated, and how to use it
+#+end_example
+
+Ask for an Artanis adapter and a libcurl client with two flags:
+
+#+begin_src shell
+guile -L ./src -c '((@ (openapi-generator cli) main!)
+                    (list "generate" "-i" "examples/petstore.yaml" "-o" "gen"
+                          "--module" "petstore"
+                          "--controllers" "artanis" "--http" "curl"))'
+#+end_src
+
+** Use the models
+:PROPERTIES:
+:CUSTOM_ID: use-the-models
+:END:
+
+#+begin_src scheme
+(use-modules (petstore models))
+
+(define rex (make-pet #:id 7 #:name "Rex" #:status "sold"))
+
+(pet-name rex)          ;; => "Rex"
+(pet-valid? rex)        ;; => #t
+(pet->jso rex)          ;; => (("id" . 7) ("name" . "Rex") ("status" . "sold"))
+(jso->pet (pet->jso rex))
+
+;; A constraint the specification declares is enforced by the constructor:
+(catch 'openapi-validation-error
+  (lambda () (make-pet #:id 7 #:name ""))
+  (lambda (key path message)
+    (format #t "~a: ~a~%" path message)))
+;; => (pet name): must be at least 1 characters long
+#+end_src
+
+** Call the API
+:PROPERTIES:
+:CUSTOM_ID: call-the-api
+:END:
+
+#+begin_src scheme
+(use-modules (petstore client)
+             (openapi-generator runtime))
+
+(define client (make-api-client
+                #:base-url "https://api.example.com/v1"
+                #:auth (make-auth #:api-keys '(("api_key" . "secret")))))
+
+(receive (pets response)
+    (list-pets client #:limit 10)
+  (map pet-name pets))          ; two values: the decoded body and the response
+#+end_src
+
+** Serve it
+:PROPERTIES:
+:CUSTOM_ID: serve-it
+:END:
+
+Vanilla controllers export =guile-handler=, a ready adapter for Guile's own
+=run-server=:
+
+#+begin_src scheme
+(use-modules (web server)
+             (petstore controllers)
+             (openapi-generator runtime))
+
+(parameterize ((api-handlers
+                (list (cons 'list-pets
+                            (lambda (request arguments)
+                              (ok '#()))))))
+  (run-server (guile-handler) 'http '(#:host "127.0.0.1" #:port 8080)))
+#+end_src
+
+If you are embedding the dispatcher in a test or another server, call =dispatch=
+directly with an =<http-request>=:
+
+#+begin_src scheme
+(parameterize ((api-handlers
+                (list (cons 'list-pets
+                            (lambda (request arguments)
+                              (ok (map pet->jso pets)))))))
+  (dispatch (make-http-request 'GET "/pets" '(("limit" . "10")) '() #f)))
+;; => an <http-response> with status 200 and the pets as its body
+#+end_src
+
+With Artanis, the adapter registers everything for you:
+
+#+begin_src scheme
+(use-modules (petstore controllers artanis))
+(register-routes!)
+#+end_src
+
+** Next steps
+:PROPERTIES:
+:CUSTOM_ID: next-steps
+:END:
+
+- Want a complete, runnable server?  Follow [[file:guide.org][Build a complete app]].
+- Want a client only?  Skip the controllers and ask for
+  =--targets models,client=.
+- Want to keep the options with the project?  Add an
+  [[file:cli.org::#configuration-file][=openapi-generator.yaml=]] and generate with =--config=.
+- Want to vendor the runtime?  Add =--self-contained=.

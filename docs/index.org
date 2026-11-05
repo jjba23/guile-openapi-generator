@@ -1,0 +1,34 @@
+#+title: Documentation
+#+subtitle: Guile OpenAPI Generator
+#+options: toc:t
+
+The manual, split by task.  Every page links back here, and each one is also
+linked from the project's README.
+
+* Reading order
+
+| Page                                        | What it covers                                                   |
+|---------------------------------------------+------------------------------------------------------------------|
+| [[file:overview.org][Overview and features]]                    | what the generator does, and why it is built the way it is        |
+| [[file:install.org][Install]]                                   | Guix, Nix, containers and distribution packages                   |
+| [[file:quick-start.org][Quick start]]                           | generate a tree, use the models, call the API                     |
+| [[file:guide.org][Build a complete app]]                     | one specification to a running server, step by step               |
+| [[file:cli.org][The command line]]                        | every option, the configuration file and the =spec= command       |
+| [[file:spec.org][From routes to a specification]]         | the other direction: an existing server becomes OpenAPI           |
+| [[file:generated-code.org][What gets generated]]                  | models, controllers, client, authentication, errors and naming    |
+| [[file:internals.org][Inside the generator]]                  | the pipeline and where to change what                             |
+| [[file:reference.org][Reference and development]]             | the Scheme API, tests, contributing and licensing                 |
+
+* By question
+
+- *I have never used this.*  Read [[file:overview.org][Overview and features]], then
+  [[file:quick-start.org][Quick start]].
+- *I want to install it.*  [[file:install.org][Install]] lists every route and what each one
+  needs.
+- *I want to generate a client for someone else's API.*  [[file:quick-start.org][Quick start]]
+  then [[file:generated-code.org::#authentication][Authentication]].
+- *I have an existing server and want a specification.*
+  [[file:spec.org][From routes to a specification]].
+- *I want to change the generator itself.*  [[file:internals.org][Inside the generator]],
+  then [[file:reference.org::#development][Development]].
+- *Something behaves unexpectedly.*  [[file:generated-code.org::#when-something-goes-wrong][When something goes wrong]].

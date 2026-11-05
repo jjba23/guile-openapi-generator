@@ -85,21 +85,26 @@ route readers are meant to read, not code that anything should compile.
 
 The load path is exported in the shell line rather than put in front of `find':
 an assignment in front of a pipeline applies to that one command, so `guild
-compile' would otherwise run without src/ and test/ on its path."
+compile' would otherwise run without src/ and test/ on its path.  The whole line
+runs under `sh -c' because `guix shell' takes the first word after `--' as the
+command: an `export' there is looked up as a program and the rest of the line is
+never run in the same shell."
   ;; A shell is what this needs: an `export' that outlives the first command,
-  ;; and a `find -print0 | xargs -0' pair.  Every part below is one shell word,
-  ;; quoted where the shell must keep it one.
+  ;; and a `find -print0 | xargs -0' pair.  The script is one shell word, so its
+  ;; double quotes reach the shell that reads it.
   (time-machine-manifest-shell
-   (list "export" "GUILE_LOAD_PATH=./src:./test:$GUILE_LOAD_PATH;"
-         "find" "src" "test" "-name" "'*.scm'"
-         "-not" "-path" "'test/generated/*'"
-         "-not" "-path" "'test/fixtures/programs/*'"
-         "-not" "-path" "'test/fixtures/routes/*'"
-         "-print0"
-         "|"
-         "xargs" "-0" "-n" "1" "guild" "compile"
-         "-o" (shell-quote
-               (~ "~a/guile-openapi-generator-check.go" (tmp-dir))))
+   (list "sh" "-c"
+         (shell-quote
+          (string-append
+           "set -eu\n"
+           "export GUILE_LOAD_PATH=./src:./test:$GUILE_LOAD_PATH\n"
+           "find src test -name \"*.scm\""
+           " -not -path \"test/generated/*\""
+           " -not -path \"test/fixtures/programs/*\""
+           " -not -path \"test/fixtures/routes/*\""
+           " -print0 | xargs -0 -n 1 guild compile -o "
+           (shell-quote (~ "~a/guile-openapi-generator-check.go" (tmp-dir)))
+           "\n")))
    #:verbose? #t))
 
 (define (generate)

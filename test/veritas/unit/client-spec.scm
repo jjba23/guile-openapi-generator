@@ -45,6 +45,25 @@
   (emit-client (petstore-spec)
                (test-config #:root "petstore" #:http 'curl)))
 
+(define params-text
+  (emit-client (fixture-spec "params.yaml") (test-config #:root "params")))
+
+(define (squash text)
+  "Return @var{text} with every run of whitespace reduced to one space.
+
+The renderer wraps a deeply nested form, so a substring that is one line in the
+source can be spread over several in the output."
+  (let loop ((characters (string->list text))
+             (space? #t)
+             (result '()))
+    (cond
+      ((null? characters)
+       (list->string (reverse result)))
+      ((char-whitespace? (car characters))
+       (loop (cdr characters) #t (if space? result (cons #\space result))))
+      (else
+       (loop (cdr characters) #f (cons (car characters) result))))))
+
 (define base-port
   ;; A port range derived from the process id, so a run never reuses a port that
   ;; a previous run may still have in TIME_WAIT.
@@ -260,6 +279,27 @@ changing the environment of a multi-threaded process is undefined."
                     (assert-equal #:expect '("500")
                                   #:got (lines output))))))))
 
+(define parameter-suite
+  (suite "Parameter serialization"
+         (test "An array query parameter uses its declared style"
+               (assert-true (contains? params-text
+                                       "(query-parameter-entries \"tags\" tags 'form")))
+
+         (test "A deepObject query parameter is qualified by the runtime"
+               (assert-true (contains? params-text
+                                       "(query-parameter-entries \"filter\" filter"))
+               (assert-true (contains? params-text "'deepObject #t")))
+
+         (test "A cookie parameter becomes a Cookie header"
+               (assert-true (contains? params-text
+                                       "(cookie-string"))
+               (assert-true (contains? (squash params-text)
+                                       "(cons \"session\" session)")))
+
+         (test "Both transports fold duplicate Cookie headers"
+               (assert-true (contains? guile-text "merge-cookie-headers"))
+               (assert-true (contains? curl-text "merge-cookie-headers")))))
+
 (define (spec)
   (veritas-run #:concurrent? #f
-               text-suite behaviour-suite))
+               text-suite behaviour-suite parameter-suite))

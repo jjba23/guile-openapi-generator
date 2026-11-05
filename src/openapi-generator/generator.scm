@@ -51,17 +51,62 @@
 
 (define (ensure-directory! path)
   "Create @var{path} and every missing parent directory."
-  (unless (or (string-null? path) (file-exists? path))
-    (ensure-directory! (dirname path))
-    (mkdir path)))
+  (cond
+    ((or (string-null? path) (string=? path ".") (string=? path "/")) #t)
+    ((file-exists? path)
+     (unless (eq? (stat:type (stat path)) 'directory)
+       (error (format #f "~a exists and is not a directory" path))))
+    (else
+     (ensure-directory! (dirname path))
+     (catch #t
+       (lambda () (mkdir path))
+       (lambda (key . arguments)
+         ;; Another process may have created it between the check and the call.
+         (unless (and (file-exists? path)
+                      (eq? (stat:type (stat path)) 'directory))
+           (apply throw key arguments)))))))
+
+(define (generated-path output relative)
+  "Return the absolute-or-relative path of @var{relative} inside @var{output}."
+  (string-append (string-trim-right output #\/) "/" relative))
+
+(define write-counter 0)
+
+(define (temporary-path path)
+  "Return a name beside @var{path} that no other write in this process uses."
+  (set! write-counter (+ write-counter 1))
+  (format #f "~a.tmp-~a-~a" path (getpid) write-counter))
+
+(define (file-up-to-date? path content)
+  "Return @code{#t} when @var{path} already holds exactly @var{content}."
+  (and (file-exists? path)
+       (equal? content (call-with-input-file path get-string-all))))
 
 (define (write-generated output relative content)
-  "Write @var{content} to @var{relative} inside @var{output}, and return the path."
-  (let ((path (string-append (string-trim-right output #\/) "/" relative)))
-    (ensure-directory! (dirname path))
-    (call-with-output-file path
-      (lambda (port)
-        (display content port)))
+  "Write @var{content} to @var{relative} inside @var{output}, and return the path.
+
+The write is skipped when the file already holds the content, so regenerating an
+unchanged tree does not touch timestamps and build systems are not woken for
+nothing.  When it is written, it goes to a temporary file that is renamed over
+the target: a process killed mid-write leaves either the old file or the new
+one, never a truncated module."
+  (let ((path (generated-path output relative)))
+    (unless (file-up-to-date? path content)
+      (ensure-directory! (dirname path))
+      (let* ((temporary (temporary-path path))
+             (mode (and (file-exists? path) (stat:mode (stat path)))))
+        (dynamic-wind
+          (lambda () #t)
+          (lambda ()
+            (call-with-output-file temporary
+              (lambda (port)
+                (display content port)))
+            (when mode
+              (chmod temporary (logand mode #o7777)))
+            (rename-file temporary path))
+          (lambda ()
+            (when (file-exists? temporary)
+              (delete-file temporary))))))
     path))
 
 ;;; Commentary:
@@ -105,49 +150,57 @@ was installed or loaded, and in the load path second."
    (format #f "(define-module (~{~a~^ ~})" from)
    (format #f "(define-module (~{~a~^ ~})" to)))
 
-(define (copy-runtime! output root)
-  "Copy the runtime modules into @var{output} under the @var{root} prefix.
+(define (module-file-name module)
+  "Return the path of the source file of @var{module}."
+  (string-append (string-join (map symbol->string module) "/") ".scm"))
 
-The copied @code{jso} module keeps its own name, because it has no dependency;
-the @code{runtime} module is rewritten to import the copy rather than the
-installed one."
-  (let* ((jso-module (append root '(jso)))
-         (runtime-module (append root '(runtime)))
-         (json-module (append root '(json)))
-         (jso-source (find-source jso-file))
-         (runtime-source (find-source runtime-file)))
-    (write-generated output
-                     (string-append (string-join (map symbol->string jso-module)
-                                                 "/")
-                                    ".scm")
-                     (rewrite-module (call-with-input-file jso-source
-                                       get-string-all)
-                                     '(openapi-generator jso)
-                                     jso-module))
-    (write-generated output
-                     (string-append (string-join (map symbol->string
-                                                      runtime-module)
-                                                 "/")
-                                    ".scm")
-                     (rewrite-module
-                      (string-replace-substring
-                       (call-with-input-file runtime-source get-string-all)
-                       "(openapi-generator jso)"
-                       (format #f "(~{~a~^ ~})" jso-module))
-                      '(openapi-generator runtime)
-                      runtime-module))
-    (write-generated output
-                     (string-append (string-join (map symbol->string json-module)
-                                                  "/")
-                                    ".scm")
-                     (rewrite-module
-                      (string-replace-substring
-                       (call-with-input-file (find-source json-file) get-string-all)
-                       "(openapi-generator jso)"
-                       (format #f "(~{~a~^ ~})" jso-module))
-                      '(openapi-generator json)
-                      json-module))
-    (list jso-module runtime-module json-module)))
+(define (runtime-module-names self-contained? root)
+  "Return the names of the runtime modules the generated code links against.
+
+Without @var{self-contained?} they are the installed modules; with it they are
+copies under @var{root}."
+  (if self-contained?
+      (list (append root '(jso)) (append root '(runtime)) (append root '(json)))
+      (list '(openapi-generator jso)
+            '(openapi-generator runtime)
+            '(openapi-generator json))))
+
+(define (runtime-copies root)
+  "Return the entries of the runtime modules copied under @var{root}.
+
+Nothing is written here: the entries join the plan of the run, so a failure
+while generating one of them cannot leave a half-copied runtime behind.  The
+copied @code{jso} module keeps its own name, because it has no dependency; the
+other two are rewritten to import the copy rather than the installed module."
+  (let* ((modules (runtime-module-names #t root))
+         (jso-module (car modules))
+         (runtime-module (cadr modules))
+         (json-module (caddr modules))
+         (jso-import (format #f "(~{~a~^ ~})" jso-module)))
+    (define (rewritten source module name)
+      (rewrite-module (string-replace-substring source
+                                                "(openapi-generator jso)"
+                                                jso-import)
+                      name
+                      module))
+    (list (list 'jso
+                (module-file-name jso-module)
+                (rewrite-module
+                 (call-with-input-file (find-source jso-file) get-string-all)
+                 '(openapi-generator jso)
+                 jso-module))
+          (list 'runtime
+                (module-file-name runtime-module)
+                (rewritten (call-with-input-file (find-source runtime-file)
+                             get-string-all)
+                           runtime-module
+                           '(openapi-generator runtime)))
+          (list 'json
+                (module-file-name json-module)
+                (rewritten (call-with-input-file (find-source json-file)
+                             get-string-all)
+                           json-module
+                           '(openapi-generator json))))))
 
 ;;; Commentary:
 ;;; Generating
@@ -186,7 +239,8 @@ installed one."
                    (exclude-write-only? #f)
                    (x-extensible-enums? #f)
                    (fault-tolerant-enums? #f)
-                   (non-null-response-payloads? #f))
+                   (non-null-response-payloads? #f)
+                   (check? #f))
   "Generate Guile code from an OpenAPI 3.x specification.
 
 Exactly one of @var{document} (a parsed document, as a jso value),
@@ -228,6 +282,12 @@ matching properties.  @var{x-extensible-enums?} treats
 @var{non-null-response-payloads?} makes a declared success body mandatory: an
 empty or null body raises @code{openapi-empty-body} instead of decoding to
 @code{#f}.
+
+When @var{check?} is true nothing is written: the run reports only the
+components whose file is missing or differs from what would be generated, which
+is what a build uses to refuse a stale checked-in tree.  A write also skips a
+file whose content is already current, so regenerating an unchanged tree leaves
+it untouched.
 
 Returns an alist of component to the path that was written:
 
@@ -299,11 +359,7 @@ Returns an alist of component to the path that was written:
          (root (root-module-name spec module))
          (root-module (list (string->symbol root)))
          (self-contained (and self-contained? #t))
-         (runtime-modules (if self-contained
-                              (copy-runtime! output root-module)
-                              (list '(openapi-generator jso)
-                                    '(openapi-generator runtime)
-                                    '(openapi-generator json))))
+         (runtime-modules (runtime-module-names self-contained root-module))
          (config (make-config output
                               root
                               (spec-title spec)
@@ -329,43 +385,56 @@ Returns an alist of component to the path that was written:
                               x-extensible-enums?
                               fault-tolerant-enums?
                               non-null-response-payloads?))
-         (written '()))
-    (define (record! component relative content)
-      (set! written (cons (cons component
-                                (write-generated output relative content))
-                          written)))
+         (generated '()))
+    (define (add! component relative content)
+      (set! generated (cons (list component relative content) generated)))
     (when models?
-      (record! 'models
-               (config-file config 'models)
-               (emit-models spec config)))
+      (add! 'models
+            (config-file config 'models)
+            (emit-models spec config)))
     (when (and (not (eq? controllers 'none))
                (not (eq? controllers #f)))
-      (record! 'controllers
-               (config-file config 'controllers)
-               (emit-controllers spec config))
+      (add! 'controllers
+            (config-file config 'controllers)
+            (emit-controllers spec config))
       (when (eq? controllers 'artanis)
-        (record! 'artanis
-                 (format #f "~a/artanis.scm"
-                         (string-join (map symbol->string
-                                           (config-module config #f))
-                                      "/"))
-                 (emit-artanis-controllers spec config))))
+        (add! 'artanis
+              (format #f "~a/artanis.scm"
+                      (string-join (map symbol->string
+                                        (config-module config #f))
+                                   "/"))
+              (emit-artanis-controllers spec config))))
     (when (and (not (eq? http 'none)) (not (eq? http #f)))
-      (record! 'client
-               (config-file config 'client)
-               (emit-client spec config)))
+      (add! 'client
+            (config-file config 'client)
+            (emit-client spec config)))
     (when readme?
-      (record! 'readme
-               (string-append (string-join (map symbol->string
-                                                (config-module config #f))
-                                           "/")
-                              "/README.org")
-               (generated-readme spec config written)))
+      (add! 'readme
+            (string-append (string-join (map symbol->string
+                                             (config-module config #f))
+                                        "/")
+                           "/README.org")
+            (generated-readme spec config
+                              (map (lambda (entry) (cons (car entry) #f))
+                                   (reverse generated)))))
     (when (eq? dependencies 'guix)
-      (record! 'dependencies
-               "dependencies.scm"
-               (dependencies-source config)))
-    (reverse written)))
+      (add! 'dependencies "dependencies.scm" (dependencies-source config)))
+    ;; Everything is rendered before anything is written: a specification the
+    ;; generator chokes on halfway through leaves the previous tree intact
+    ;; rather than replacing two files out of four.
+    (let ((plan (append (reverse generated)
+                        (if self-contained (runtime-copies root-module) '()))))
+      (if check?
+          (filter-map
+           (lambda (entry)
+             (let ((path (generated-path output (cadr entry))))
+               (and (not (file-up-to-date? path (caddr entry)))
+                    (cons (car entry) path))))
+           plan)
+          (map (lambda (entry)
+                 (cons (car entry)
+                       (write-generated output (cadr entry) (caddr entry))))
+               plan)))))
 
 (define (dependencies-source config)
   "Return a Guix manifest for the runtime dependencies of the generated code.

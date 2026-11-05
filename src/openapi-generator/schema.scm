@@ -183,14 +183,31 @@
 ;;; Registry
 
 (define-record-type <registry>
-  (make-registry table names policy)
+  (%make-registry table names identifiers policy)
   registry?
   (table registry-table)
   (names registry-names set-registry-names!)
+  (identifiers registry-identifiers)
   (policy registry-policy))
 
+(define (identifier-table names)
+  "Return a table of the identifiers of @var{names}, for collision checks.
+
+Keeping the identifiers in a hash table is what makes naming a document with
+thousands of schemas linear: recomputing @code{identifier} of every registered
+name for each new one was the most expensive thing the model generator did."
+  (let ((table (make-hash-table)))
+    (for-each (lambda (name)
+                (hash-set! table (identifier name) #t))
+              names)
+    table))
+
+(define* (make-registry table names #:optional (policy 'all))
+  "Return a registry over @var{table} and @var{names}, with @var{policy}."
+  (%make-registry table names (identifier-table (map car names)) policy))
+
 (define* (new-registry #:optional (policy 'all))
-  (make-registry (make-hash-table) '() policy))
+  (%make-registry (make-hash-table) '() (make-hash-table) policy))
 
 (define (registry-name registry node)
   "Return the generated name of the schema @var{node}, or #f."
@@ -207,6 +224,7 @@ components first, in the order they were registered."
       (hash-ref (registry-table registry) node)
       (begin
         (hash-set! (registry-table registry) node name)
+        (hash-set! (registry-identifiers registry) (identifier name) #t)
         (set-registry-names! registry (cons (cons name node)
                                             (registry-names registry)))
         name)))
@@ -277,12 +295,9 @@ and generated kebab-case names for inline models (@code{sign-in-response});
 comparing the identifiers, not the raw strings, is what keeps those two from
 colliding in the generated module."
   (let loop ((candidate base) (counter 2))
-    (let ((candidate-identifier (identifier candidate)))
-      (if (find (lambda (entry)
-                  (string=? (identifier (car entry)) candidate-identifier))
-                (registry-names registry))
-          (loop (format #f "~a-~a" base counter) (+ counter 1))
-          candidate))))
+    (if (hash-ref (registry-identifiers registry) (identifier candidate))
+        (loop (format #f "~a-~a" base counter) (+ counter 1))
+        candidate)))
 
 (define (register-schema! registry base node)
   "Register NODE under BASE, or return the name it already has."

@@ -1,0 +1,76 @@
+#+title: Overview and features
+#+subtitle: Guile OpenAPI Generator
+#+options: toc:t
+
+[[file:index.org][<- Documentation home]]
+
+* Why you'll like it
+:PROPERTIES:
+:CUSTOM_ID: why-you-ll-like-it
+:END:
+
+** The five-second version
+:PROPERTIES:
+:CUSTOM_ID: the-five-second-version
+:END:
+
+| You have…                    | You want…                      | You get…                                                                    |
+|------------------------------+--------------------------------+-----------------------------------------------------------------------------|
+| a schema                     | data models                    | records, a keyword constructor that validates, =->jso= / =jso->= converters |
+| paths and operations         | a server                       | a route table, a dispatcher, and one procedure per operation                |
+| a new application            | a running API in minutes       | =guile-handler=, which adapts Guile's =run-server= to the dispatcher        |
+| an existing Artanis app      | routes registered for you      | an adapter that registers every route, if you ask for it                    |
+| routes you already wrote     | a specification                | an OpenAPI 3.0 YAML document, with the paths and operations read back       |
+| a remote API                 | a client                       | one procedure per operation, plain Guile or libcurl                         |
+| a tool that vendors its deps | a tree that needs nothing else | =--self-contained=, which copies the runtime next to the code               |
+
+#+begin_src scheme
+;; The whole idea, in four lines:
+(define rex (make-pet #:id 7 #:name "Rex" #:status "sold"))
+(pet-name rex)                     ;; => "Rex"
+(pet->jso rex)                     ;; => (("id" . 7) ("name" . "Rex") ("status" . "sold"))
+(pet-valid? rex)                   ;; => #t
+#+end_src
+
+#+TOC: headlines 1
+
+** Choose your path
+:PROPERTIES:
+:CUSTOM_ID: choose-your-path
+:END:
+
+| If you want to…                       | Start here                       |
+|---------------------------------------+----------------------------------|
+| Try it in under a minute              | [[file:quick-start.org][Quick start]]                      |
+| Build a complete server               | [[file:guide.org][Build a complete app]]             |
+| Understand the generated code         | [[file:generated-code.org][What gets generated]]              |
+| Generate a client for an existing API | [[file:quick-start.org][Quick start]], then [[file:generated-code.org::#authentication][Authentication]] |
+| Turn routes you already have into a spec | [[file:spec.org][From routes to a specification]] |
+| Call the library from your own code   | [[file:reference.org::#reference][Reference]]                          |
+| Understand the pipeline               | [[file:internals.org::#inside-the-generator][Inside the generator]]             |
+| Contribute a fix or a feature         | [[file:reference.org::#development][Development]]                      |
+| See the philosophy                    | [[file:reference.org::#how-the-generator-is-written][How the generator is written]]     |
+| Run the bundled example               | [[file:../examples/todo/README.org][=examples/todo/=]]                 |
+
+** Who it is for
+:PROPERTIES:
+:CUSTOM_ID: who-it-is-for
+:END:
+
+Guile OpenAPI Generator is a good fit if you:
+
+- already describe your API with OpenAPI and want the Guile side to follow;
+- are building a small service with Guile's own web server or Artanis;
+- want a generated client that feels hand-written, with docstrings, keyword
+  arguments and records instead of stringly-typed maps;
+- care about reproducible builds, free software and code you can read;
+- are curious about how far a specification can take you.
+
+It is deliberately not a multi-language code factory, and it is not a runtime
+framework. It generates ordinary Guile modules; from there, the application is
+yours.
+
+And it is Guile all the way down: records, keyword arguments, parameters,
+=receive=, ports, and a YAML reader written in Scheme.  The generated code is
+meant to look like the code you would have written, not like a template in
+another language.

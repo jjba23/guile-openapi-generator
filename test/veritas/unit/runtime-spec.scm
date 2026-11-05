@@ -315,5 +315,82 @@
                                      '())
                  (assert-equal #:expect '(("X-Trace" . "1")) #:got headers)))))
 
+(define cookie-suite
+  (suite "Cookie parameters"
+         (test "A cookie is read by name from the Cookie header"
+               (assert-equal #:expect "abc"
+                             #:got (cookie-value "session=abc; theme=dark" "session"))
+               (assert-equal #:expect "dark"
+                             #:got (cookie-value "session=abc; theme=dark" "theme")))
+
+         (test "A missing cookie is #f, not the whole header"
+               (assert-false (cookie-value "session=abc" "theme")))
+
+         (test "A quoted cookie value loses its quotes"
+               (assert-equal #:expect "a b"
+                             #:got (cookie-value "x=\"a b\"" "x")))
+
+         (test "Cookies are rendered as one header value"
+               (assert-equal #:expect "a=1; b=2"
+                             #:got (cookie-string '(("a" . 1) ("b" . 2)))))
+
+         (test "Two Cookie headers are folded into one"
+               (assert-equal #:expect '(("Cookie" . "a=1; session=s")
+                                        ("Content-Type" . "application/json"))
+                             #:got (merge-cookie-headers
+                                    '(("Cookie" . "a=1")
+                                      ("Content-Type" . "application/json")
+                                      ("Cookie" . "session=s")))))))
+
+(define query-serialization-suite
+  (suite "Query parameter serialization"
+         (test "An exploded form array repeats the name"
+               (assert-equal #:expect '(("tag" . "a") ("tag" . "b"))
+                             #:got (query-parameter-entries "tag" '("a" "b")
+                                                           'form #t)))
+
+         (test "A non-exploded form array is comma separated"
+               (assert-equal #:expect '(("tag" . "a,b"))
+                             #:got (query-parameter-entries "tag" '("a" "b")
+                                                           'form #f)))
+
+         (test "spaceDelimited and pipeDelimited use their own separator"
+               (assert-equal #:expect '(("tag" . "a b"))
+                             #:got (query-parameter-entries "tag" '("a" "b")
+                                                           'spaceDelimited #f))
+               (assert-equal #:expect '(("tag" . "a|b"))
+                             #:got (query-parameter-entries "tag" '("a" "b")
+                                                           'pipeDelimited #f)))
+
+         (test "deepObject qualifies each member with the parameter name"
+               (assert-equal #:expect '(("filter[status]" . "open"))
+                             #:got (query-parameter-entries
+                                    "filter" '(("status" . "open"))
+                                    'deepObject #t)))
+
+         (test "An absent optional value produces no entries"
+               (assert-equal #:expect '()
+                             #:got (query-parameter-entries "tag" #f 'form #t)))
+
+         (test "An exploded array is read back as a list"
+               (assert-equal #:expect '("a" "b")
+                             #:got (query-parameter-value
+                                    '(("tag" . "a") ("tag" . "b"))
+                                    "tag" 'form #t 'array 'string)))
+
+         (test "A non-exploded array is split and coerced"
+               (assert-equal #:expect '(1 2)
+                             #:got (query-parameter-value
+                                    '(("ids" . "1,2"))
+                                    "ids" 'form #f 'array 'integer)))
+
+         (test "A deepObject parameter is read back as an alist"
+               (assert-equal #:expect '(("status" . "open") ("limit" . 3))
+                             #:got (query-parameter-value
+                                    '(("filter[status]" . "open")
+                                      ("filter[limit]" . "3"))
+                                    "filter" 'deepObject #t 'object 'integer)))))
+
 (define (spec)
-  (veritas-run validation-suite http-suite auth-suite))
+  (veritas-run validation-suite http-suite auth-suite cookie-suite
+               query-serialization-suite))

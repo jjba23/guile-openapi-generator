@@ -67,6 +67,8 @@ RUN set -eu; \
     sh scripts/install-tree --destdir "$root"; \
     install -Dm644 LICENSE "$root/usr/share/doc/guile-openapi-generator/LICENSE"; \
     install -Dm644 README.org "$root/usr/share/doc/guile-openapi-generator/README.org"; \
+    install -d "$root/usr/share/doc/guile-openapi-generator/docs"; \
+    install -m644 docs/*.org "$root/usr/share/doc/guile-openapi-generator/docs/"; \
     echo "==> Staged files"; \
     ls -R "$root"
 

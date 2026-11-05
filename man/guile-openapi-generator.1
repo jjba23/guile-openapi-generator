@@ -32,10 +32,12 @@ hand or fed to the
 .B generate
 command.
 .PP
-The command word may be left out: an invocation that starts with an option
-means
-.BR generate ,
-because that was the only command the tool had for a while.
+The command word is required.  An invocation without one is an error rather
+than a guess at which command was meant; only
+.B \-\-help
+and
+.B \-\-version
+work on their own.
 .SH COMMANDS
 .TP
 .B generate
@@ -49,12 +51,19 @@ source is read as data.
 .SH OPTIONS FOR GENERATE
 .TP
 .BI \-\-input " SPEC" "\fR, \fB\-i " SPEC
-The OpenAPI document to read: a path, or an http(s) URL.  One of this and
+The OpenAPI document to read: a path, an http(s) URL, or
+.I \-
+for standard input.  One of this and
 .B \-\-json\-schema\-file
 is required.
 .TP
 .BI \-\-output " DIR" "\fR, \fB\-o " DIR
 The directory to write the generated tree to.  Default: \fIgenerated\fP.
+.TP
+.B \-\-check
+Report the files that a run would rewrite and write nothing.  The exit status is
+1 when the tree is stale and 0 when it is up to date, which is what a
+continuous-integration job wants.
 .TP
 .BI \-\-module " NAME" "\fR, \fB\-m " NAME
 The root module name.  Default: the API title, in kebab case.
@@ -301,8 +310,13 @@ The byte-compiled copies, installed by the packages so that loading a module
 does not compile it on first use.  The exact path follows the distribution's
 Guile.
 .SH "SEE ALSO"
-The project's README, which is the manual: a quick start, a complete example
-application, the generated code explained, and the whole command line.
+The project's documentation, which is the manual: a quick start, a complete
+example application, the generated code explained, and the whole command line.
+It starts at
+.I README.org
+and continues in the
+.I docs/
+directory installed beside it.
 .PP
 https://codeberg.org/jjba23/guile\-openapi\-generator
 .SH AUTHOR

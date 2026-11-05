@@ -184,7 +184,8 @@ client needs nothing but Guile and guile-json."
                                 (not (header-ref headers "Accept")))
                            (header-set headers "Accept" accept)
                            headers))
-              (request-headers (append headers (api-client-headers client))))
+              (request-headers (merge-cookie-headers
+                                (append headers (api-client-headers client)))))
          (receive (response response-body)
              (http-request url
                            #:method method
@@ -253,7 +254,8 @@ bytes, so the transport reads them and lets the generated code decode them."
                                 (not (header-ref headers "Accept")))
                            (header-set headers "Accept" accept)
                            headers))
-              (all-headers (append headers (api-client-headers client)))
+              (all-headers (merge-cookie-headers
+                            (append headers (api-client-headers client))))
               (curl (curl-easy-init)))
          (dynamic-wind
              (lambda () #t)
@@ -405,6 +407,21 @@ all and the HTTP client rightly rejects it."
              '()
              (list (cons ,name ,field))))))
 
+(define (cookie-argument-form parameter)
+  "Return the form that adds @var{parameter} to a Cookie header.
+
+A cookie parameter is a member of the Cookie header, not a header of its own,
+so it is encoded as @code{name=value} and merged with any cookie the security
+schemes add before the request is sent."
+  (let ((name (parameter-name parameter))
+        (field (parameter-field parameter)))
+    (if (parameter-required? parameter)
+        `(list (cons "Cookie" (cookie-string (list (cons ,name ,field)))))
+        `(if (eq? ,field #f)
+             '()
+             (list (cons "Cookie"
+                         (cookie-string (list (cons ,name ,field)))))))))
+
 (define (request-media-kind operation)
   "Return how the request body of @var{operation} is encoded."
   (let ((media-type (operation-request-media-type operation)))
@@ -450,6 +467,24 @@ all and the HTTP client rightly rejects it."
     (and response
          (ordered-media-types (response-media-types response)))))
 
+(define (query-parameter-form parameter)
+  "Return the form that appends the query entries of @var{parameter}.
+
+A scalar sent in the default style is the readable @code{(list (cons name
+value))}; an array, an object or a parameter with a non-default serialization
+style goes through the runtime helper that knows how that style spells it."
+  (let* ((name (parameter-name parameter))
+         (field (parameter-field parameter))
+         (style (parameter-style-symbol parameter))
+         (explode (parameter-effective-explode? parameter))
+         (kind (case (schema-type (parameter-schema parameter))
+                 ((array) 'array)
+                 ((object) 'object)
+                 (else 'scalar))))
+    (if (and (eq? style 'form) explode (eq? kind 'scalar))
+        `(list (cons ,name ,field))
+        `(query-parameter-entries ,name ,field ',style ,explode))))
+
 (define (send-arguments ctx operation)
   "Return the keyword arguments of the @code{client-send} call of @var{operation}.
 
@@ -457,18 +492,15 @@ The media type the specification declares decides the content type, how the body
 is encoded, what the client asks for, and how the response is decoded.  A
 multipart body is built by the operation itself, because its boundary has to be
 the same in the body and in the header."
-  (let* ((query (map (lambda (parameter)
-                       `(cons ,(parameter-name parameter)
-                              ,(parameter-field parameter)))
+  (let* ((query (map query-parameter-form
                      (parameters-by-location (operation-parameters operation)
                                              'query)))
          (headers (map header-argument-form
-                       (append (parameters-by-location
-                                (operation-parameters operation)
-                                'header)
-                               (parameters-by-location
-                                (operation-parameters operation)
-                                'cookie))))
+                       (parameters-by-location (operation-parameters operation)
+                                               'header)))
+         (cookies (map cookie-argument-form
+                       (parameters-by-location (operation-parameters operation)
+                                               'cookie)))
          (body (and (operation-request-body operation)
                     (request-shape ctx operation)))
          (request-kind (request-media-kind operation))
@@ -481,10 +513,10 @@ the same in the body and in the header."
     (append
      (list #:query (if (null? query)
                        'auth-query
-                       `(append (list ,@query) auth-query))
-           #:headers (if (null? headers)
+                       `(append ,@query auth-query))
+           #:headers (if (and (null? headers) (null? cookies))
                          'auth-headers
-                         `(append auth-headers ,@headers))
+                         `(append auth-headers ,@headers ,@cookies))
            #:accept accept
            #:response-encoding (quoted (response-media-kind operation)))
      (cond
@@ -537,14 +569,17 @@ value; a path without them is the literal string the specification gives."
           (string-join
            (map (lambda (parameter)
                   (let ((type (schema-type (parameter-schema parameter))))
-                    (format #f "  - ~a (~a~a, ~a)"
+                    (format #f "  - ~a (~a~a, ~a~a)"
                             (parameter-name parameter)
                             (if type (symbol->string type) "value")
                             (if (parameter-required? parameter)
                                 ", required"
                                 "")
                             (symbol->string
-                             (parameter-location parameter)))))
+                             (parameter-location parameter))
+                            (if (parameter-deprecated? parameter)
+                                ", deprecated"
+                                ""))))
                 parameters)
            "\n"))))
    (if (operation-request-body operation)
@@ -553,6 +588,9 @@ value; a path without them is the literal string the specification gives."
                  (if media-type
                      (media-type-name media-type)
                      "the declared media type")))
+       "")
+   (if (operation-deprecated? operation)
+       "\n\nDeprecated by the specification."
        "")
    (format #f
            "\n\nReturns two values: the decoded body~a and the <http-response>.\n\nCredentials come from AUTH, which defaults to the client's."

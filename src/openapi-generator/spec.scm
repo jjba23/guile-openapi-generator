@@ -70,7 +70,9 @@
             parameter-description
             parameter-schema
             parameter-style
+            parameter-style-symbol
             parameter-explode?
+            parameter-effective-explode?
             parameter-deprecated?
             parameter-raw
             <request-body> request-body? make-request-body
@@ -497,6 +499,27 @@ satisfied together with its siblings."
                     (jso-true? (jso-ref node "explode"))
                     (jso-true? (jso-ref node "deprecated"))
                     node)))
+
+(define (parameter-style-symbol parameter)
+  "Return the serialization style of @var{parameter} as a symbol.
+
+The specification writes the style as a string and leaves it out for the
+default, @code{form}."
+  (let ((style (parameter-style parameter)))
+    (cond
+      ((symbol? style) style)
+      ((string? style) (string->symbol style))
+      (else 'form))))
+
+(define (parameter-effective-explode? parameter)
+  "Return whether @var{parameter} explodes its value, applying the default.
+
+OpenAPI defaults @code{explode} to true for @code{form} and false for
+@code{spaceDelimited}, @code{pipeDelimited} and @code{deepObject}; reading the
+absent member as @code{#f} would serialize every array the wrong way."
+  (if (jso-has? (parameter-raw parameter) "explode")
+      (parameter-explode? parameter)
+      (eq? (parameter-style-symbol parameter) 'form)))
 
 (define (parameters-by-location parameters location)
   "Return the parameters of @var{parameters} that live in @var{location}."

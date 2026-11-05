@@ -176,14 +176,21 @@ the result is OpenAPI 3.x."
 (define* (read-document source #:key (format #f) (headers '()))
   "Read and parse the YAML/JSON document named by @var{source}.
 
-@var{source} may be a path, an http(s) URL, a file:// URL, or the document text
-itself.  The result is not validated: callers that need an OpenAPI document use
-@code{read-spec} or call @code{validate-document} themselves."
-  (if (locator? source)
-      (read-document-string (fetch-text source #:headers headers)
-                            #:format (or format (format-for-locator source))
-                            #:source source)
-      (read-document-string source #:format format #:source "<document>")))
+@var{source} may be a path, an http(s) URL, a file:// URL, @code{"-"} for
+standard input, or the document text itself.  The result is not validated:
+callers that need an OpenAPI document use @code{read-spec} or call
+@code{validate-document} themselves."
+  (cond
+    ((equal? source "-")
+     (read-document-string (get-string-all (current-input-port))
+                           #:format format
+                           #:source "<stdin>"))
+    ((locator? source)
+     (read-document-string (fetch-text source #:headers headers)
+                           #:format (or format (format-for-locator source))
+                           #:source source))
+    (else
+     (read-document-string source #:format format #:source "<document>"))))
 
 (define (merge-documents base fragment)
   "Return @var{fragment} merged into @var{base}, recursively for objects.
@@ -226,19 +233,26 @@ checked to be OpenAPI 3.x before it is returned."
                     #:validate? validate?))
 
 (define* (read-spec source #:key (format #f) (validate? #t) (headers '()))
-  "Read a specification from @var{source}: a path, an http(s) URL, or the
-document itself.
+  "Read a specification from @var{source}: a path, an http(s) URL, @code{"-"}
+for standard input, or the document itself.
 
 @var{headers} is sent on a remote fetch."
-  (if (locator? source)
-      (read-spec-string (fetch-text source #:headers headers)
-                        #:format (or format (format-for-locator source))
-                        #:source source
-                        #:validate? validate?)
-      (read-spec-string source
-                        #:format format
-                        #:source "<document>"
-                        #:validate? validate?)))
+  (cond
+    ((equal? source "-")
+     (read-spec-string (get-string-all (current-input-port))
+                       #:format format
+                       #:source "<stdin>"
+                       #:validate? validate?))
+    ((locator? source)
+     (read-spec-string (fetch-text source #:headers headers)
+                       #:format (or format (format-for-locator source))
+                       #:source source
+                       #:validate? validate?))
+    (else
+     (read-spec-string source
+                       #:format format
+                       #:source "<document>"
+                       #:validate? validate?))))
 
 ;;; Commentary:
 ;;; Validation

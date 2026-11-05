@@ -1,0 +1,99 @@
+#+title: Inside the generator
+#+subtitle: Guile OpenAPI Generator
+#+options: toc:t
+
+[[file:index.org][<- Documentation home]]
+
+* Inside the generator
+:PROPERTIES:
+:CUSTOM_ID: inside-the-generator
+:END:
+
+This section is the map of the machinery: what happens between a file and a
+generated tree, which module owns which decision, and what you touch to change
+one of them.  You do not need it to use the project; you need it to extend it,
+or to predict what it will do with an unusual specification.
+
+** The pipeline
+:PROPERTIES:
+:CUSTOM_ID: the-pipeline
+:END:
+
+| Stage        | Module              | Takes                             | Produces                                    |
+|--------------+---------------------+-----------------------------------+---------------------------------------------|
+| read         | =reader=            | a path, URL or string             | one validated jso document                  |
+| interpret    | =spec=              | the jso document                  | a =<spec>=: operations, responses             |
+| give meaning | =schema=            | one schema, resolved               | a =<shape>=: record, enum, list, map, union  |
+| name         | =naming=            | specification names               | Scheme identifiers                          |
+| emit         | =models=, =controllers=, =client= | a =<spec>= and a =<config>=          | s-expressions, docstrings and all            |
+| render       | =code=              | s-expressions                     | indented Scheme text                        |
+| write        | =generator=         | text, and the tree's layout       | files on disk                               |
+
+Each stage is usable on its own, which is what makes the library useful beyond
+the command: =read-spec-file= without generating, =parse-spec= without rendering,
+=emit-models= without writing a file.
+
+- *Read.* =reader= decides YAML or JSON from the content, not the extension;
+  fetches the document when the input is a URL; merges =--api-fragment=s;
+  resolves external references through =bundle=; applies the opt-in transforms
+  in =transforms=; and refuses anything that is not OpenAPI 3.x.  Its errors
+  name what it was looking at, before a line is generated.
+- *Interpret.* =parse-spec= turns the document into a =<spec>=:
+  servers with their variables expanded, operations with method and path,
+  parameters with their location and requiredness, request bodies and responses
+  with their media types and headers, and the security schemes an operation
+  accepts.  From here on nothing reads raw jso except to keep an unknown
+  extension member intact.
+- *Give meaning.* =schema-shape= turns one schema into a =<shape>=:
+  =record=, =enum=, =list=, =map=, =union= or =scalar=, carrying its properties,
+  items, branches, discriminator and nullability.  This is where =allOf= is
+  flattened into one record, where =oneOf=/=anyOf= become a union with a
+  decoder, and where an inline object is given a name of its own.
+- *Name.* Every identifier the generated code uses — =<pet>=, =pet-name=,
+  =pet-status-sold=, =get-pet-by-id= — is made in =naming=, once.  An emitter
+  never glues text into a name, so a definition and the call to it cannot drift.
+- *Emit.* =models=, =controllers= and =client= build definitions as
+  s-expressions with quasiquote: a definition, a docstring, an entry in the
+  =#:export= list.
+- *Render.* =code= owns indentation, alignment, line breaking and docstring
+  quoting.  A layout rule added there improves every emitter at once, which is
+  why it has a suite of its own.
+- *Write.* =generator= puts the targets in dependency order — models before the
+  controllers and the client that import them — creates the directory, writes the
+  files, and reports what it wrote.
+
+** Three invariants
+:PROPERTIES:
+:CUSTOM_ID: three-invariants
+:END:
+
+- *Nothing is guessed.*  A missing =operationId= is derived from the method and
+  the path; a missing response is =200= with no content; a missing schema is an
+  empty one.  Those defaults are written down (see
+  [[file:spec.org][From routes to a specification]]), and
+  everything else that is unknown raises an error naming it.  A typo in a flag,
+  an unknown =--source=, a route whose captures disagree with its parameter list:
+  all of them stop the run instead of producing something plausible.
+- *Errors are keys.*  Every failure the generated code can raise is thrown with a
+  symbol — =openapi-validation-error=, =openapi-no-route=,
+  =openapi-not-implemented=, =openapi-http-error=, =openapi-auth-error= — and
+  carries the path or the inputs that produced it.  A caller catches exactly what
+  it means to catch.
+- *Generated code is data.*  Emitters produce lists, =code= renders them, and the
+  same forms are what the tests load.  So the text a test asserts on and the code
+  a program runs cannot be two different things.
+
+** Where to change what
+:PROPERTIES:
+:CUSTOM_ID: where-to-change-what
+:END:
+
+| You want to...                              | Touch                                      | Prove it in                                  |
+|---------------------------------------------+--------------------------------------------+----------------------------------------------|
+| support a schema keyword                    | =schema.scm=, then =models.scm=            | =schema-spec.scm=, =models-spec.scm=         |
+| change how a name is made                   | =naming.scm=                               | =naming-spec.scm=                            |
+| change generated layout                     | =code.scm=                                 | =code-spec.scm=                              |
+| add an option                               | =config.scm=, =cli.scm=, =generator.scm=   | =generator-spec.scm=                         |
+| read another framework's routes             | a new module next to =guile-routes.scm=    | a new suite with a fixture under =routes/=   |
+| describe another specification shape        | =routes.scm=                               | =routes-spec.scm=                            |
+| fix what a real API exposes                 | a fixture under =test/fixtures/real/=       | =real-specs-spec.scm=                        |

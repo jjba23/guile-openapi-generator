@@ -76,7 +76,7 @@ guile -L ./src -L ./test -c '(exit ((@ (veritas runner) run-tests)))'
 
 %files
 %license LICENSE
-%doc README.org
+%doc README.org docs
 %{_bindir}/guile-openapi-generator
 %{_mandir}/man1/guile-openapi-generator.1%{?ext_man}
 %dir %{_datadir}/guile

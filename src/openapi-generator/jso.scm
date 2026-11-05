@@ -74,13 +74,19 @@
   (eq? value json-null))
 
 (define (jso-object? value)
-  "Return @code{#t} when @var{value} is a JSON object."
-  (and (list? value)
-       (not (json-null? value))
-       (every (lambda (entry)
-                (and (pair? entry)
-                     (string? (car entry))))
-              value)))
+  "Return @code{#t} when @var{value} is a JSON object.
+
+A jso object is an association list with string keys, so the first entry is
+enough to tell it apart from an array, a scalar and the empty list.  Every
+reader and constructor in this project builds objects that way, and checking the
+whole list on every lookup made reading a large specification quadratic in the
+number of members."
+  (cond
+    ((null? value) #t)
+    ((pair? value)
+     (let ((entry (car value)))
+       (and (pair? entry) (string? (car entry)))))
+    (else #f)))
 
 (define (jso-array? value)
   "Return @code{#t} when @var{value} is a JSON array."

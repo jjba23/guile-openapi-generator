@@ -17,9 +17,9 @@
 ;;
 ;; There are two commands.  @code{generate} reads a specification and writes
 ;; Guile; @code{spec} reads the routes of an existing Guile or Artanis server
-;; and writes an OpenAPI 3.0 document in YAML.  An invocation with no command
-;; word still means @code{generate}, because that was the only command the tool
-;; had for a while.
+;; and writes an OpenAPI 3.0 document in YAML.  The command word is required:
+;; an invocation without one is an error, not a guess at which command the
+;; caller meant.
 ;;
 ;; Every option has a long and a short spelling, the defaults are the ones that
 ;; surprise least (plain Guile controllers, plain Guile client, models included),
@@ -59,8 +59,9 @@
   '((help . "Show this help and exit.")
     (version . "Show the version and exit.")
     (config . "Read options from a YAML or JSON file; flags override it.")
-    (input . "The OpenAPI 3.x specification to read (.yaml or .json).")
+    (input . "The OpenAPI 3.x specification to read (.yaml, .json, or - for stdin).")
     (output . "The directory to write the generated code to.")
+    (check . "Report files that are missing or out of date; write nothing.")
     (module . "The root module name (default: the API title).")
     (targets . "Comma-separated: models, controllers, client, readme.")
     (controllers . "vanilla, artanis or none (default: vanilla).")
@@ -92,6 +93,7 @@
     (config (value #t))
     (input (single-char #\i) (value #t))
     (output (single-char #\o) (value #t))
+    (check)
     (module (single-char #\m) (value #t))
     (targets (single-char #\t) (value #t))
     (controllers (single-char #\c) (value #t))
@@ -172,6 +174,8 @@ because a usage text is also read as plain text in a bug report."
           "  openapi-generator generate -i petstore.yaml -o gen -c artanis -H curl~%")
   (format port
           "  openapi-generator generate --config openapi-generator.yaml~%")
+  (format port
+          "  openapi-generator generate -i api.yaml -o gen --check~%")
   (format port
           "  openapi-generator generate -i api.yaml -o gen -t models,client~%")
   (format port
@@ -390,17 +394,12 @@ when there is none, to the key itself."
 (define* (generate-main #:optional (arguments (cdr (command-line))))
   "Run the @code{generate} command on @var{arguments} and return an exit code.
 
-The arguments start after the program name, and the first of them may be the
-word @code{generate}, which is accepted so that the invocation reads like the
-other task runners in this project.
+The arguments start after the command word.
 
 Options are resolved in this order: the command line, then the file named by
 @code{--config}, then the built-in default.  A flag therefore only has to be
 written when it differs from the file."
-  (let ((arguments (if (and (pair? arguments)
-                            (string=? (car arguments) "generate"))
-                       (cdr arguments)
-                       arguments)))
+  (let ((arguments arguments))
     (catch #t
       (lambda ()
         (let* ((parsed (getopt-long (cons "openapi-generator" arguments)
@@ -486,7 +485,8 @@ written when it differs from the file."
                     (dependencies
                      (parse-dependencies
                       (resolve-option parsed config
-                                      'dependencies "none"))))
+                                      'dependencies "none")))
+                    (check? (option-supplied? parsed 'check)))
                (unless (or input json-schema-file)
                  (usage (current-error-port))
                  (error "one of --input or --json-schema-file is required"))
@@ -536,11 +536,30 @@ written when it differs from the file."
                                                 'operation-id-transform #f)
                                 #:header? header?
                                 #:header-text header-text
-                                #:dependencies dependencies)))
-                 (for-each (lambda (entry)
-                             (format #t "~a: ~a~%" (car entry) (cdr entry)))
-                           written)
-                 0))))))
+                                #:dependencies dependencies
+                                #:check? check?)))
+                 (if check?
+                     (if (null? written)
+                         (begin
+                           (format #t "generated tree is up to date~%")
+                           0)
+                         (begin
+                           (for-each
+                            (lambda (entry)
+                              (format (current-error-port)
+                                      "~a: ~a is not up to date~%"
+                                      (car entry)
+                                      (cdr entry)))
+                            written)
+                           (format (current-error-port)
+                                   "~a generated file(s) need to be regenerated~%"
+                                   (length written))
+                           1))
+                     (begin
+                       (for-each (lambda (entry)
+                                   (format #t "~a: ~a~%" (car entry) (cdr entry)))
+                                 written)
+                       0))))))))
       (lambda (key . arguments)
         (format (current-error-port)
                 "openapi-generator: ~a~%"
@@ -620,24 +639,33 @@ instead of a file, which is what a pipeline wants."
 (define* (main #:optional (arguments (cdr (command-line))))
   "Run the command line @var{arguments} and return an exit code.
 
-The first argument selects the command: @code{spec} reads routes out of source
-and writes a specification, and anything else — including the word
-@code{generate} — is the generator itself.  The @code{generate} spelling is
-accepted so that an invocation reads like the other task runners in this
-project, and because it is what older scripts pass.
+The first argument selects the command: @code{generate} reads a specification
+and writes Guile, @code{spec} reads routes out of source and writes a
+specification.  A missing or unknown command is an error; @code{--help} and
+@code{--version} are the only options that work without one.
 
 Both commands report an error as a one-line diagnostic and return status 1
 rather than letting a backtrace out; @code{main!} turns the status into the exit
 status of the process."
-  (if (and (pair? arguments) (string=? (car arguments) "spec"))
-      (catch #t
-        (lambda () (spec-main (cdr arguments)))
-        (lambda (key . arguments)
-          (format (current-error-port)
-                  "openapi-generator: ~a~%"
-                  (exception-message key arguments))
-          1))
-      (generate-main arguments)))
+  (cond
+   ((and (pair? arguments) (string=? (car arguments) "generate"))
+    (generate-main (cdr arguments)))
+   ((and (pair? arguments) (string=? (car arguments) "spec"))
+    (catch #t
+      (lambda () (spec-main (cdr arguments)))
+      (lambda (key . arguments)
+        (format (current-error-port)
+                "openapi-generator: ~a~%"
+                (exception-message key arguments))
+        1)))
+   ((and (pair? arguments)
+         (member (car arguments) '("--help" "-h" "--version" "-v")))
+    (generate-main arguments))
+   (else
+    (usage (current-error-port))
+    (format (current-error-port)
+            "openapi-generator: expected a command: generate or spec~%")
+    1)))
 
 (define* (main! #:optional (arguments (cdr (command-line))))
   "Run the generator as a command and exit with its status.

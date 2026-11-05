@@ -113,29 +113,65 @@ type of @var{parameter}."
        (format #f "(string=? ~a \"true\")" raw))
       (else raw))))
 
+(define (parameter-kind parameter)
+  "Return how the schema of @var{parameter} is shaped: array, object or scalar."
+  (case (schema-type (parameter-schema parameter))
+    ((array) 'array)
+    ((object) 'object)
+    (else 'scalar)))
+
+(define (parameter-item-type parameter)
+  "Return the type of the items of the array or map @var{parameter} describes."
+  (let* ((schema (parameter-schema parameter))
+         (items (and schema (jso-ref schema "items"))))
+    (or (and (jso-object? items) (schema-type items)) 'string)))
+
 (define (parameter-decoder parameter)
   "Return the keyword argument declaration and decoding of @var{parameter}."
   (let* ((field (parameter-field parameter))
          (location (parameter-location parameter))
          (required? (parameter-required? parameter))
-         (raw (case location
-                ((header)
-                 (format #f "(http-request-header request ~s)"
-                         (parameter-name parameter)))
-                ((cookie)
-                 (format #f "(header-ref (http-request-headers request) \"Cookie\")"))
-                (else
-                 (format #f "(http-request-query-ref request ~s)"
-                         (parameter-name parameter)))))
-         (decoded (format #f "(let ((raw ~a)) (if raw ~a #f))"
-                          raw
-                          (query-value-expression parameter "raw"))))
+         (kind (parameter-kind parameter))
+         (name (parameter-name parameter))
+         (decoded
+          (cond
+            ((and (eq? location 'query) (not (eq? kind 'scalar)))
+             ;; An array or an object is spread over the query string by the
+             ;; style the specification names, so the runtime helper that knows
+             ;; that spelling reads it back the same way the client wrote it.
+             (format #f
+                     "(query-parameter-value (http-request-query request) ~s '~a ~a '~a '~a)"
+                     name
+                     (parameter-style-symbol parameter)
+                     (if (parameter-effective-explode? parameter) "#t" "#f")
+                     kind
+                     (parameter-item-type parameter)))
+            ((eq? location 'cookie)
+             (let ((read (format #f
+                                 "(cookie-value (http-request-header request \"Cookie\") ~s)"
+                                 name)))
+               (if (eq? kind 'scalar)
+                   read
+                   ;; A cookie has no array spelling of its own; a list is the
+                   ;; comma-separated value the client wrote.
+                   (format #f
+                           "(let ((raw ~a)) (if raw (map (lambda (item) (coerce-query-value item '~a)) (string-split raw #\\,)) #f))"
+                           read
+                           (parameter-item-type parameter)))))
+            (else
+             (let* ((raw (if (eq? location 'header)
+                             (format #f "(http-request-header request ~s)" name)
+                             (format #f "(http-request-query-ref request ~s)" name)))
+                    (cooked (format #f "(let ((raw ~a)) (if raw ~a #f))"
+                                    raw
+                                    (query-value-expression parameter "raw"))))
+               cooked)))))
     (if required?
         (format #f "(cons '~a (or ~a (validation-failure '(\"~a\" ~s) \"is required but is missing\")))"
                 field
                 decoded
                 field
-                (parameter-name parameter))
+                name)
         (format #f "(cons '~a ~a)" field decoded))))
 
 (define (path-argument-expression parameter)
@@ -313,11 +349,14 @@ through raw."
        ((and (string? summary) (not (string-null? summary)))
         (format #f "~%~%~a" summary))
        (else "")))
+   (if (operation-deprecated? operation)
+       "~%~%Deprecated by the specification."
+       "")
    (if (null? parameters)
        ""
        (format #f "~%~%Parameters:~%~{  - ~a~^~%~}"
                (map (lambda (parameter)
-                      (format #f "~a (~a~a, ~a)"
+                      (format #f "~a (~a~a, ~a~a)"
                               (parameter-name parameter)
                               (let ((type (schema-type
                                            (parameter-schema parameter))))
@@ -325,7 +364,10 @@ through raw."
                               (if (parameter-required? parameter)
                                   ", required"
                                   "")
-                              (symbol->string (parameter-location parameter))))
+                              (symbol->string (parameter-location parameter))
+                              (if (parameter-deprecated? parameter)
+                                  ", deprecated"
+                                  "")))
                     parameters)))
    (if body
        (let ((media-type (operation-request-media-type operation)))

@@ -1,0 +1,195 @@
+#+title: Build a complete app
+#+subtitle: Guile OpenAPI Generator
+#+options: toc:t
+
+[[file:index.org][<- Documentation home]]
+
+* Build a complete app
+:PROPERTIES:
+:CUSTOM_ID: build-a-complete-app
+:END:
+
+[[file:../examples/todo/README.org][=examples/todo/=]] is a complete, runnable application: one specification, a
+generated tree, an in-memory store, four handlers and a client.  From a clone:
+
+#+begin_src shell
+cd examples/todo
+./run.sh demo
+#+end_src
+
+That generates the code, serves the API on =http://127.0.0.1:8080=, calls it
+with the generated client, and stops the server.  The rest of this section is
+what the example does, so you can build the same shape for your own API.
+
+The example is also the source of the animation at the top of this README: it is
+a real run, not a mock-up.
+
+** Describe the API
+:PROPERTIES:
+:CUSTOM_ID: describe-the-api
+:END:
+
+Write an OpenAPI document.  The example's =openapi.yaml= has a collection and an
+item route:
+
+#+begin_src yaml
+paths:
+  /todos:
+    get:
+      operationId: listTodos
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Todo'}
+    post:
+      operationId: createTodo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/NewTodo'}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Todo'}
+#+end_src
+
+** Generate once
+:PROPERTIES:
+:CUSTOM_ID: generate-once
+:END:
+
+Put the options in a checked-in file so every build agrees:
+
+#+begin_src yaml
+# openapi-generator.yaml
+input: openapi.yaml
+output: gen
+module: todo
+controllers: vanilla
+http: guile
+#+end_src
+
+#+begin_src shell
+guile -L ../../src -c '((@ (openapi-generator cli) main!)
+                        (list "generate" "--config" "openapi-generator.yaml"))'
+#+end_src
+
+The tree is ordinary source: =gen/todo/models.scm=, =controllers.scm=,
+=client.scm= and a =README.org= that lists the operations and the next steps.
+Regenerate whenever the specification changes; edit the application, not =gen/=.
+
+** Write the handlers
+:PROPERTIES:
+:CUSTOM_ID: write-the-handlers
+:END:
+
+A controller handler receives the request and an alist of decoded arguments.  A
+path parameter is an integer, a query parameter is decoded, and a request body is
+already a validated record.  Array and object query parameters follow their
+declared =style= and =explode=, and a cookie parameter is read from the =Cookie=
+header:
+
+#+begin_src scheme
+(use-modules (ice-9 format)
+             (srfi srfi-1)
+             (web server)
+             (openapi-generator runtime)
+             (todo controllers)
+             (todo models))
+
+(define todos
+  (list (make-todo #:id 1 #:title "Read the generated README" #:done #t)))
+
+(define (create-todo-handler request arguments)
+  (let* ((new (cdr (assq 'body arguments)))          ; a <new-todo>
+         (todo (make-todo #:id 2
+                          #:title (new-todo-title new)
+                          #:done (or (new-todo-done new) #f))))
+    (set! todos (cons todo todos))
+    (created (todo->jso todo))))
+
+(define (get-todo-handler request arguments)
+  (let ((todo (find (lambda (todo)
+                      (= (todo-id todo) (cdr (assq 'id arguments))))
+                    todos)))
+    (if todo
+        (ok (todo->jso todo))
+        (not-found "No such todo"))))
+#+end_src
+
+Return a response with =ok=, =created=, =no-content=, =text-response=,
+=binary-response= or =error-response=.  JSON bodies are serialised for you;
+convert a record with its =->jso= procedure first.
+
+** Serve it
+:PROPERTIES:
+:CUSTOM_ID: serve-it-2
+:END:
+
+Vanilla controllers export =guile-handler=, which adapts Guile's own
+=run-server= to the generated dispatcher.  The complete server is:
+
+#+begin_src scheme
+(define handlers
+  (list (cons 'list-todos
+              (lambda (request arguments)
+                (ok (list->vector (map todo->jso todos)))))
+        (cons 'create-todo create-todo-handler)
+        (cons 'get-todo get-todo-handler)))
+
+(parameterize ((api-handlers handlers))
+  (run-server (guile-handler) 'http '(#:host "127.0.0.1" #:port 8080)))
+#+end_src
+
+Handlers are looked up by the operation name in =api-handlers=; an operation
+with no handler raises =openapi-not-implemented= instead of returning a
+mysterious 500.  With Artanis, use =register-routes!= instead (see the quick
+start above).
+
+** Call it
+:PROPERTIES:
+:CUSTOM_ID: call-it
+:END:
+
+#+begin_src shell
+curl http://127.0.0.1:8080/todos
+curl -X POST http://127.0.0.1:8080/todos \
+     -H 'Content-Type: application/json' -d '{"title":"Ship it"}'
+#+end_src
+
+or use the generated client, which returns the decoded body and the response:
+
+#+begin_src scheme
+(use-modules (ice-9 receive)
+             (todo client)
+             (todo models))
+
+(define client (make-api-client))          ; starts from the spec's server URL
+
+(receive (todo response)
+    (create-todo client
+                 #:body (make-new-todo #:title "Ship it" #:done #f))
+  (format #t "created #~a: ~a~%" (todo-id todo) (todo-title todo)))
+#+end_src
+
+** Package it
+:PROPERTIES:
+:CUSTOM_ID: package-it
+:END:
+
+- =--self-contained= copies the runtime modules next to the generated code, so
+  the application needs only Guile and guile-json.
+- =--dependencies guix= writes a =dependencies.scm= manifest for
+  =guix shell -m=.
+- =--targets models= generates only the data shapes, for documentation or a
+  shared library; a client or controller target always brings the models it
+  needs.
+
+When the specification grows, add the route to =openapi.yaml=, regenerate, and
+add a handler.  The generated =README.org= and the compiler tell you the
+procedure and record names for the new operation.

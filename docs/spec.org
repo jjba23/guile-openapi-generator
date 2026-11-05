@@ -1,0 +1,148 @@
+#+title: From routes to a specification
+#+subtitle: Guile OpenAPI Generator
+#+options: toc:t
+
+[[file:index.org][<- Documentation home]]
+
+* From routes to a specification
+:PROPERTIES:
+:CUSTOM_ID: from-routes-to-a-specification
+:END:
+
+The generator reads a specification and writes Guile.  The same idea runs
+backwards: an application that already has routes can describe them as OpenAPI
+3.0, in YAML, and get the specification it never wrote — as a starting point to
+refine, or as the input of the next generation run.
+
+From a shell it is one command — =openapi-generator spec=, listed with the
+other one in [[file:cli.org::#the-other-direction-spec][the command line]] — and from Scheme it is three modules.
+=(openapi-generator routes)= is the model (a route, its parameters, its request
+body and its responses) plus the writer that turns a list of them into a
+document.  =(openapi-generator guile-routes)= and
+=(openapi-generator artanis-routes)= read routes out of source code and hand
+that model back, so both ends stay in Scheme.
+
+** A route, in Scheme
+
+#+begin_src scheme
+(use-modules (openapi-generator routes))
+
+(define routes
+  (list (route 'get "/pets"
+               #:summary "List pets"
+               #:tags '("pets")
+               #:parameters (list (parameter "limit" #:in 'query #:type 'integer)))
+        (route 'post "/pets"
+               #:tags '("pets")
+               #:request-body (request-body #:ref "#/components/schemas/NewPet")
+               #:responses (list (response 201 #:ref "#/components/schemas/Pet")))
+        (route 'get "/pets/{petId}"
+               #:operation-id "getPet"
+               #:responses (list (response 200 #:ref "#/components/schemas/Pet")
+                                (response 404 #:description "No pet has that id")))))
+
+(routes->yaml-file routes "openapi.yaml"
+                    #:title "Pet store"
+                    #:version "1.0.0"
+                    #:servers '("https://api.example.com/v1")
+                    #:schemas (list (cons "Pet" pet-schema)))
+#+end_src
+
+=routes->yaml-file= writes an OpenAPI 3.0.3 document; =routes->yaml= returns it
+as a string and =routes->document= returns it as the jso value the reader
+produces, so it can be handed to =parse-spec= and generated from without a trip
+through a file.  Everything a route already says is used, and four rules fill in
+the rest:
+
+| The route says...        | ...and the document gets                                  |
+|--------------------------+-----------------------------------------------------------|
+| =/pets/{petId}=          | a required =path= parameter called =petId=, typed =string= |
+| =:petId= (Artanis)       | the same, spelled =/pets/{petId}=                          |
+| nothing about its name   | an =operationId= derived from the method and the path       |
+| nothing about the answer | a =200 OK= with no content                                  |
+
+What a route cannot say on its own — the schemas, the descriptions, the servers
+— is a keyword argument with a sensible default, never a guess.  And because the
+document is ordinary data, the tests read it back with =parse-spec=: a
+specification this project cannot parse would be of no use whatever it looked
+like.
+
+** From an existing Guile server
+
+=guile-routes-from-file= reads Scheme *source*; the application is never loaded
+and no handler runs.  It understands the two spellings a plain Guile server has:
+the route table this generator writes, with its compiled patterns, and the
+declaration a hand-written server tends to use.
+
+#+begin_src scheme
+(use-modules (openapi-generator guile-routes)
+             (openapi-generator routes))
+
+;; A route table, exactly as (openapi-generator controllers) emits it:
+;;   (make-route 'GET (make-regexp "^/pets/([^/]+)/?$") '("petId") 'get-pet-by-id)
+;; and the declarations of a server written by hand:
+;;   (get "/healthz" handler)
+
+(routes->yaml-file (guile-routes-from-file "app/controllers.scm")
+                    "openapi.yaml"
+                    #:title "My API")
+#+end_src
+
+The compiled pattern is undone rather than approximated: the anchors go, each
+capture group becomes a placeholder again, an escaped =\.= becomes a dot, and the
+parameter list says which name belongs to which group.  A pattern whose captures
+disagree with its parameter list raises instead of describing some other route.
+The handler name becomes the =operationId= (=get-pet-by-id= → =getPetById=), and
+because the pattern and the parameter list agree, generating controllers from
+the result gives the same routes back.
+
+** From an existing Artanis app
+
+Artanis declares a route by applying a method macro to a path and a handler,
+with the route's options in between.  The reader turns those into the same
+routes, and each option lands where OpenAPI needs it:
+
+#+begin_src scheme
+(use-modules (openapi-generator artanis-routes)
+             (openapi-generator routes))
+
+;; (get "/pets/:petId" (lambda (rc) ...))
+;; (post "/pets" #:from-body #:consumes 'application/json (lambda (rc) ...))
+;; (delete "/pets/:petId" #:with-auth (lambda (rc) ...))
+
+(routes->yaml-file (artanis-routes-from-file "app/routes.scm")
+                    "openapi.yaml"
+                    #:title "My Artanis API")
+#+end_src
+
+| The Artanis option  | ...becomes                                          |
+|---------------------+-----------------------------------------------------|
+| =:petId=            | ={petId}=, with a required path parameter            |
+| =#:consumes=        | the media type of the request body                   |
+| =#:from-body=       | a JSON request body when nothing else says otherwise |
+| =#:produces=, =#:mime= | the media type of the default =200= response      |
+| =#:with-auth=       | =x-artanis-with-auth: true= on the operation         |
+
+Two things are deliberately not invented.  A protected route is marked as one
+but gets no =security= requirement, because an Artanis auth callback says that a
+route is protected, not which scheme protects it.  And a handler's body is not
+read, so every operation gets the one =200= response it certainly has; the
+summaries, the other statuses and the schemas are the part only you know.
+
+** What is read, and what is not
+
+Both readers read source as data: quoted forms are skipped, declarations are
+found at any depth (inside =register-routes!=, inside a =define=), and a call
+that merely looks like a route — =(get table 'key)= — is not one.  Nothing is
+evaluated, so the file does not have to compile for its routes to be readable,
+and no handler is called.
+
+What comes out is a valid specification with the right operations.  It is a
+skeleton, not a substitute for thinking: response schemas, request schemas and
+descriptions are yours to add, and the next =generate= run will then produce the
+models and clients from them.
+
+One practical detail: a recovered document has no =components.schemas= until you
+write them, and a generation run with no schemas has no models to write.  Until
+then, generate with =--no-models= (controllers and client only); once the
+schemas are in, the same command without it writes the models too.

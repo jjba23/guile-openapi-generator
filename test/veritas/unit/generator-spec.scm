@@ -215,7 +215,7 @@ report is only useful for its keys and for the assertions made here."
                (assert-eq #:expect 'none #:got (parse-controllers "NONE"))
                (assert-eq #:expect 'curl #:got (parse-backend "curl")))
 
-         (test "generate is accepted as the first word"
+         (test "generate is an explicit command"
                (with-temporary-directory "cli"
                  (lambda (directory)
                    (let ((status (quiet
@@ -228,7 +228,15 @@ report is only useful for its keys and for the assertions made here."
                                                 "--http" "none"))))))
                      (assert-eqv #:expect 0 #:got status)
                      (assert-false (file-exists? (join directory
-                                                       "cli-app/models.scm")))))))))
+                                                       "cli-app/models.scm")))))))
+
+         (test "A command word is required"
+               (assert-eqv #:expect 1
+                           #:got (quiet
+                                  (lambda ()
+                                    (main (list "--input"
+                                                (fixture "petstore.yaml")
+                                                "--output" "/tmp/never"))))))))
 
 (define version-suite
   (suite "Version"
@@ -468,7 +476,95 @@ report is only useful for its keys and for the assertions made here."
                                   (join directory "dependencies.scm"))
                                  "guile-json"))))))))
 
+(define reliability-suite
+  (suite "Deterministic, safe writes"
+         #:concurrent? #f
+
+         (test "Two runs produce identical trees"
+               (with-temporary-directory "determinism-a"
+                 (lambda (first)
+                   (with-temporary-directory "determinism-b"
+                     (lambda (second)
+                       (generate #:input (fixture "petstore.yaml")
+                                 #:output first #:module "stable")
+                       (generate #:input (fixture "petstore.yaml")
+                                 #:output second #:module "stable")
+                       (for-each
+                        (lambda (relative)
+                          (assert-equal #:expect (file-contents
+                                                  (join first relative))
+                                        #:got (file-contents
+                                               (join second relative))
+                                        #:name relative))
+                        '("stable/models.scm" "stable/controllers.scm"
+                          "stable/client.scm" "stable/README.org")))))))
+
+         (test "--check accepts a tree it just wrote"
+               (with-temporary-directory "check-fresh"
+                 (lambda (directory)
+                   (assert-eqv #:expect 0
+                               #:got (quiet
+                                      (lambda ()
+                                        (main (list "generate"
+                                                    "--input"
+                                                    (fixture "petstore.yaml")
+                                                    "--output" directory
+                                                    "--module" "checked")))))
+                   (assert-eqv #:expect 0
+                               #:got (quiet
+                                      (lambda ()
+                                        (main (list "generate"
+                                                    "--input"
+                                                    (fixture "petstore.yaml")
+                                                    "--output" directory
+                                                    "--module" "checked"
+                                                    "--check"))))))))
+
+         (test "--check reports a stale file and leaves it alone"
+               (with-temporary-directory "check-stale"
+                 (lambda (directory)
+                   (quiet
+                    (lambda ()
+                      (main (list "generate"
+                                  "--input" (fixture "petstore.yaml")
+                                  "--output" directory
+                                  "--module" "checked"))))
+                   (let ((path (join directory "checked/models.scm")))
+                     (call-with-output-file path
+                       (lambda (port) (display "stale" port)))
+                     (assert-eqv #:expect 1
+                                 #:got (quiet
+                                        (lambda ()
+                                          (main (list "generate"
+                                                      "--input"
+                                                      (fixture "petstore.yaml")
+                                                      "--output" directory
+                                                      "--module" "checked"
+                                                      "--check")))))
+                     (assert-equal #:expect "stale"
+                                   #:got (file-contents path)
+                                   #:name "--check writes nothing")))))
+
+         (test "--input - reads the specification from standard input"
+               (with-temporary-directory "stdin"
+                 (lambda (directory)
+                   (let ((status
+                          (parameterize
+                              ((current-input-port
+                                (open-input-string
+                                 (file-contents (fixture "mini.yaml")))))
+                            (quiet
+                             (lambda ()
+                               (main (list "generate"
+                                           "--input" "-"
+                                           "--output" directory
+                                           "--module" "piped"
+                                           "--targets" "models")))))))
+                     (assert-eqv #:expect 0 #:got status)
+                     (assert-true (file-exists?
+                                   (join directory "piped/models.scm")))))))))
+
 (define (spec)
   (veritas-run #:concurrent? #f
                report-suite self-contained-suite cli-suite version-suite
-               validation-suite configuration-suite))
+               validation-suite configuration-suite reliability-suite))

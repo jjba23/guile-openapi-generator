@@ -1,0 +1,263 @@
+#+title: What gets generated
+#+subtitle: Guile OpenAPI Generator
+#+options: toc:t
+
+[[file:index.org][<- Documentation home]]
+
+* What gets generated
+:PROPERTIES:
+:CUSTOM_ID: what-gets-generated
+:END:
+
+The generated tree is small, readable, and meant to be kept in version control
+next to the application that uses it.
+
+** Models
+:PROPERTIES:
+:CUSTOM_ID: models
+:END:
+
+For a schema called =Pet= with a required =name=:
+
+#+begin_src scheme
+(define-record-type <pet>
+  (%make-pet id name status)
+  pet?
+  (id pet-id)
+  (name pet-name)
+  (status pet-status))
+
+(define* (make-pet #:key (id #f) (name #f) (status #f))
+  "Create a Pet. ..."
+  (let ((value (%make-pet id name status)))
+    (validate-pet value)
+    value))
+
+(define (validate-pet value) ...)   ;; the constraints, one check per line
+(define (pet-valid? value) ...)     ;; #t or #f, never an exception
+(define (pet->jso value) ...)       ;; a record as JSON-ready data
+(define (jso->pet node) ...)        ;; and back
+(define* (pet-apply-patch value patch) ...)  ;; RFC 7386
+#+end_src
+
+Rules worth knowing:
+
+- *Fields are keyword arguments.* Required ones have no default, so a forgotten
+  member is reported by validation, with its path.
+- *Absent optional members are left out* of =->jso=, while a *nullable* member
+  set to =#f= is written as JSON null. That is what makes a merge patch mean
+  "leave alone" and "delete" respectively.
+- *An optional collection defaults to the empty collection*, unless the schema
+  gives it a minimum size: then the default is =#f=, so the default does not
+  violate the specification.
+- *A required boolean may be =#f=.* The one required member that is not checked
+  for presence is a boolean, because =#f= is a value there.
+- *Enumerations are values, not types*: a value list, one constant per value
+  (=pet-status-sold=), a predicate (=pet-status?=), and converters.
+- *Named scalars, lists and maps* get a validating predicate and converters, so
+  =(email? "a@b.c")= and =(name-list->jso '("a"))= exist.
+- *Inline objects get names*: a request body of =createPet= is the record
+  =create-pet-request=, a nested property =status-detail=, and so on.
+
+** Controllers
+:PROPERTIES:
+:CUSTOM_ID: controllers
+:END:
+
+#+begin_src scheme
+(define routes
+  "The route table of the specification, in declaration order."
+  (list
+    (make-route 'GET (make-regexp "^/pets/?$") '() 'list-pets)
+    (make-route 'POST (make-regexp "^/pets/?$") '() 'post-pets)
+    (make-route 'GET (make-regexp "^/pets/([^/]+)/?$") '("petId") 'get-pet-by-id)))
+
+(define api-handlers (make-parameter '()))
+
+(define* (dispatch request #:key (handlers (api-handlers))) ...)
+#+end_src
+
+A handler receives the request and an alist of decoded arguments:
+
+#+begin_src scheme
+(lambda (request arguments)
+  ;; arguments is ((limit . 10) (body . #<<new-pet> ...>))
+  ...)
+#+end_src
+
+Path parameters are converted to the declared type, query and header parameters
+too, and a request body is decoded into its record. An operation with no handler
+raises =openapi-not-implemented=; a path that matches no route raises
+=openapi-no-route=. Both are reported, not guessed.
+
+Vanilla controllers also export =guile-handler=, so the generated dispatcher can
+be served by Guile itself:
+
+#+begin_src scheme
+(use-modules (web server)
+             (petstore controllers)
+             (openapi-generator runtime))
+
+(parameterize ((api-handlers handlers))
+  (run-server (guile-handler) 'http '(#:port 8080)))
+#+end_src
+
+** Client
+:PROPERTIES:
+:CUSTOM_ID: client
+:END:
+
+#+begin_src scheme
+(define* (get-pet-by-id client #:key pet-id (auth (api-client-auth client)))
+  "GET /pets/{petId}
+
+Parameters:
+  - petId (integer, required, path)
+
+Returns two values: the decoded body (a Pet) and the <http-response>."
+  (receive (auth-headers auth-query)
+      (authenticate auth api-security-schemes '((("api_key"))))
+    (let ((path (params->path "/pets/{petId}" (list (cons "petId" pet-id)))))
+      (let ((response (client-send client 'GET path
+                                   #:query auth-query
+                                   #:headers auth-headers)))
+        (expect-status response '(200))
+        (values (jso->pet (http-response-body response)) response)))))
+#+end_src
+
+=expect-status= is what makes an undeclared status an error: a =500= is not
+decoded into a record and quietly returned.
+
+** A tree you can vendor
+:PROPERTIES:
+:CUSTOM_ID: a-tree-you-can-vendor
+:END:
+
+With =--self-contained=, the three runtime modules are copied next to the
+generated code and the generated =define-module= forms are rewritten to import
+the copies:
+
+#+begin_example
+gen/petstore/models.scm
+gen/petstore/controllers.scm
+gen/petstore/client.scm
+gen/petstore/jso.scm
+gen/petstore/runtime.scm
+gen/petstore/json.scm
+#+end_example
+
+The directory then loads with nothing but its own path and guile-json — which is
+what a test asserts, rather than assuming it.
+
+* Authentication
+:PROPERTIES:
+:CUSTOM_ID: authentication
+:END:
+
+The specification describes credentials as security schemes; an operation lists
+the alternatives that authorise it. Both become data in the generated client:
+
+#+begin_src scheme
+(define api-security-schemes
+  '(("api_key" ("type" . "apiKey") ("in" . "header") ("name" . "X-API-Key"))
+    ("bearer_auth" ("type" . "http") ("scheme" . "bearer"))))
+
+;; What the caller has:
+(make-auth #:api-keys '(("api_key" . "secret")))
+(make-auth #:bearer-token "eyJhbGciOi..." #:scopes '("read:pets"))
+(make-auth #:username "alice" #:password "hunter2")
+#+end_src
+
+=authenticate= picks the first alternative the credentials satisfy, checks the
+OAuth2 scopes a requirement asks for, and returns the headers and query
+parameters that express them. Credentials that satisfy nothing raise
+=openapi-auth-error=, because calling a secured operation anonymously is a
+programming error, not something the server should be told about.
+
+API key in the header, in the query, or in a cookie; HTTP basic; bearer tokens;
+OAuth2 and OpenID Connect — all of them are described by the same table, so a
+specification that mixes them needs no special cases.
+
+* JSON merge patch
+:PROPERTIES:
+:CUSTOM_ID: json-merge-patch
+:END:
+
+Every record has =(pet-apply-patch value patch)=; the runtime exports
+=json-merge-patch= for the data itself.
+
+#+begin_src scheme
+(use-modules (openapi-generator jso))
+
+(json-merge-patch '(("a" . 1) ("b" . 2)) '(("b" . 3) ("c" . null)))
+;; => (("a" . 1) ("b" . 3))     a is untouched, b replaced, c removed
+#+end_src
+
+The distinction the implementation depends on is that null is a *value* while an
+absent member has no value at all. The reader keeps them apart: =json-null= is
+the symbol =null=, which is also what guile-json reads and writes for null.
+
+A patch is applied to the data and the result is read back through the
+constructor, so a patch that would leave a record invalid raises like any other
+bad value.
+
+* Errors
+:PROPERTIES:
+:CUSTOM_ID: errors
+:END:
+
+| Key                        | Raised by                                            |
+|----------------------------+------------------------------------------------------|
+| =openapi-validation-error= | a constructor or =validate-…=, with =(path message)= |
+| =openapi-auth-error=       | =authenticate=, when no requirement is satisfiable   |
+| =openapi-not-implemented=  | a controller route whose operation has no handler    |
+| =openapi-no-route=         | the dispatcher, when no route matches                |
+| =openapi-http-error=       | =expect-status=, with =(status body)=                |
+
+#+begin_src scheme
+(catch 'openapi-validation-error
+  (lambda () (make-pet #:name ""))
+  (lambda (key path message)
+    (format (current-error-port) "~a: ~a~%" path message)))
+#+end_src
+
+Reading fails early and says what it was looking at: a document that is not
+OpenAPI 3.x, a missing =openapi= member, or a YAML tab used for indentation is
+reported as such, before a single line of code is generated.
+
+** When something goes wrong
+:PROPERTIES:
+:CUSTOM_ID: when-something-goes-wrong
+:END:
+
+| What you see                                                     | What it means                                                                    |
+|------------------------------------------------------------------+----------------------------------------------------------------------------------|
+| =No routes were found in app/routes.scm=                          | The source has no route forms, or =--source= does not match its style.  Quoted forms are skipped on purpose: a route the reader cannot be sure about is not reported. |
+| =Unknown route source: sinatra=                                   | =--source= takes =guile= or =artanis=, and nothing else.                          |
+| =(pet name) is required but is missing=                            | A record was built without a required member, or a body was sent that the schema says must carry it — a Kubernetes merge patch, for instance, is validated as the object it patches. |
+| =no code for module (openapi-generator runtime)=                   | The generated tree imports the runtime; put =src/= on =GUILE_LOAD_PATH=, or generate with =--self-contained=. |
+| =no code for module (guile-curl)=                                 | =--http curl= needs guile-curl installed; =--http guile= needs nothing but Guile. |
+| A run writes no models                                       | The specification has no =components.schemas= — a recovered document has none until you add them.  Generate with =--no-models= until then. |
+| =openapi-no-route= from a running server                           | The dispatcher matched no route: check the method as well as the path, and remember a trailing slash is accepted. |
+
+The two commands report what they did on standard output and what went wrong on
+standard error, and both exit 1 on failure, so =set -e= in a build script is
+enough to stop at the first problem.
+
+* Naming
+:PROPERTIES:
+:CUSTOM_ID: naming
+:END:
+
+Specifications are written for other languages; Guile code is kebab-case.
+
+| Specification                    | Guile                                                            |
+|----------------------------------+------------------------------------------------------------------|
+| =Pet=, =NewPet=                  | =<pet>=, =pet?=, =make-pet=, =pet-name=                          |
+| =/pets/{petId}=, =getPetById=    | =get-pet-by-id= (method and path when there is no =operationId=) |
+| =pet_photo_urls=, =PetPhotoUrls= | =pet-photo-urls=                                                 |
+| a property called =else=         | =else-field= (a Scheme keyword gains a suffix)                   |
+| =PetStatus= (enum)               | =pet-status-values=, =pet-status-sold=                           |
+
+=HTTPResponse= becomes =http-response=: a run of capitals is one word, not a
+letter-by-letter identifier.

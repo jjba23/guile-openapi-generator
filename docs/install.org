@@ -1,0 +1,195 @@
+#+title: Install
+#+subtitle: Guile OpenAPI Generator
+#+options: toc:t
+
+[[file:index.org][<- Documentation home]]
+
+* Ways to install
+:PROPERTIES:
+:CUSTOM_ID: ways-to-install
+:END:
+
+/Four routes to the same 0.0.7, from the most automated to the most manual.  They all build the tag this README documents./
+
+** From the Guix channel
+:PROPERTIES:
+:CUSTOM_ID: from-the-guix-channel
+:END:
+*GNU Guix* is the functional package manager this project is developed with: a build is a pure function of its inputs, so the same recipe gives the same result everywhere, and an upgrade that goes wrong can be rolled back.
+
+The jointhefreeworld channel carries ~guile-openapi-generator~ at 0.0.7, so a checkout of the channel is enough — no package definition to write:
+
+#+begin_src shell
+git clone https://codeberg.org/jjba23/guix-jointhefreeworld.git
+guix install -L ./guix-jointhefreeworld guile-openapi-generator
+#+end_src
+
+Add the channel to ~$HOME/.config/guix/channels.scm~ (the channel's README has the four lines) and a plain ~guix install guile-openapi-generator~ keeps working on every later ~guix pull~.
+
+** From the Nix flake
+:PROPERTIES:
+:CUSTOM_ID: from-the-nix-flake
+:END:
+*Nix* offers the same declarative, reproducible model with its own language, its own store and a binary cache, and it is a natural fit if the rest of your machine is already described in Nix.
+
+This project is not in the flake yet; the flake builds the projects that carry a Nix expression of their own.
+
+** As a container image
+:PROPERTIES:
+:CUSTOM_ID: as-a-container-image
+:END:
+*Podman or Docker* is the route that puts nothing on the host: the ~Dockerfile~ builds the project in a builder stage that installs it with the same installer the distribution recipes run (=scripts/install-tree=) and smoke-tests the result, then copies only that tree into a runtime stage, so the image is small and the host keeps its own toolchain untouched.
+
+#+begin_src shell
+podman build -t guile-openapi-generator .   # docker build -t guile-openapi-generator . also works
+
+# Generate a tree into the current directory
+podman run --rm -v "$PWD:/work" guile-openapi-generator \
+    generate -i openapi.yaml -o gen -m petstore
+
+# Recover a specification, straight to standard output
+podman run --rm -v "$PWD:/work" guile-openapi-generator \
+    spec -i app/controllers.scm -o -
+#+end_src
+
+The entry point is the installed command, the working directory is =/work=, and
+=none= mounted is enough for =--help= or =--version=:
+
+#+begin_src shell
+podman run --rm guile-openapi-generator --help
+#+end_src
+
+The image holds the launcher, the manual page and the byte-compiled library, in
+the same layout the packages install — it comes from the same script, not from a
+second description of it — and the build fails if the staged tree cannot
+generate a specification or recover one.  Building with
+=--build-arg VERSION=X.Y.Z= also makes the image check that label against
+~guile-openapi-generator --version=, so a tag cannot hold different code.  A bug
+that only shows up in a package can usually be reproduced here first.
+
+** As a distribution package
+:PROPERTIES:
+:CUSTOM_ID: as-a-distribution-package
+:END:
+*Debian, openSUSE and Arch* each get the project through their own package manager.  Packaging lives in this repository under ~packaging/~ — the recipes, the tests they run and the release steps are written down in [[file:../packaging/README.org][=packaging/README.org=]] — and is pinned to the same release tag, so the recipes and the sources they build are versioned together.
+
+Every package installs the same five things: =/usr/bin/guile-openapi-generator=
+(the launcher), the manual page, the library in Guile's site directory, its
+byte-compiled copies in the site-ccache directory, and the licence and README
+under =/usr/share=.  All four recipes — the three distributions and the
+container — get that layout from one script, =scripts/install-tree=, instead of
+repeating it, and both Guile directories are asked of Guile rather than
+hard-coded, because they differ between distributions and architectures.
+
+None of the three archives ships guile-openapi-generator yet, so these are recipes to build rather than packages to install from a mirror:
+
+| Distribution   | Package                   | How to build it                                                        |
+|----------------+---------------------------+------------------------------------------------------------------------|
+| Debian, Ubuntu | ~guile-openapi-generator~ | ~maak package-deb~ (or copy ~packaging/debian~ to the root and ~dpkg-buildpackage -us -uc -b~) |
+| openSUSE       | ~guile-openapi-generator~ | ~maak package-rpm~, or ~osc build~ with ~packaging/opensuse~          |
+| Arch           | ~guile-openapi-generator~ | ~maak package-arch~ after ~updpkgsums~ in ~packaging/arch~             |
+| Container      | =guile-openapi-generator= | ~maak package-docker~                                                  |
+
+Each recipe carries its own dependency list, so a missing library fails the build with its name rather than producing a package that cannot load.  All of them run the test suite before they produce a package, and the Debian package also ships two autopkgtests: one that exercises the *installed* command — version, help, both directions — and one that checks the layout and the byte-compiled cache, which are the only checks that can see a file installed in the wrong place.
+
+The part all four share is testable on any machine: ~maak package-smoke= installs the tree into =dist/root= with =scripts/install-tree= and runs both commands from there, so a layout bug does not need a build chroot to show up.
+
+** Which one?
+:PROPERTIES:
+:CUSTOM_ID: which-one
+:END:
+- *Guix* if you want the toolchain the project is tested with, and the ability to roll back a bad upgrade.
+- *Nix* if the rest of your machine is already declarative; this flake does not carry the project yet, but the container image and the recipes below do.
+- *Container* if you only want to try the release, or reproduce a report on a machine that has nothing installed.
+- *Distribution package* if you want the project managed by the same tool as the rest of your system, with its licence, manual page and launcher in the usual places.
+
+* Install
+:PROPERTIES:
+:CUSTOM_ID: install
+:END:
+
+The generator is a library first and a command second.  You can use it from a
+checkout without installing anything; Guix simply makes the environment
+reproducible.
+
+** With Guix (recommended)
+:PROPERTIES:
+:CUSTOM_ID: with-guix-recommended
+:END:
+
+From this repository, which packages the working tree:
+
+#+begin_src shell
+guix shell -f guix.scm -- guile -L ./src \
+  -c '(use-modules (openapi-generator)) (display "ready\n")'
+#+end_src
+
+The development environment, pinned in =channels.scm=, has Guile, guile-json,
+guile-curl, Veritas and the documentation tooling:
+
+#+begin_src shell
+guix shell -m manifest.scm -- guile -L ./src \
+  -c '(use-modules (openapi-generator)) (display "ready\n")'
+#+end_src
+
+Everything is pinned, so a local run and a CI run resolve the same packages:
+
+#+begin_src shell
+guix time-machine --channels=channels.scm -- shell -m manifest.scm -- \
+  guile -L ./src -c '(use-modules (openapi-generator)) (display "ready\n")'
+#+end_src
+
+** With any Guile
+:PROPERTIES:
+:CUSTOM_ID: with-any-guile
+:END:
+
+Any Guile 3.0 with guile-json on the load path is enough:
+
+#+begin_src shell
+git clone https://codeberg.org/jjba23/guile-openapi-generator
+cd guile-openapi-generator
+guile -L ./src -c '(use-modules (openapi-generator)) (display "ready\n")'
+#+end_src
+
+If you only want to generate a tree and not develop the generator, this is
+enough; put =src/= on the load path whenever you run the generator, or use
+=--self-contained= so the generated tree carries its own runtime.
+
+From the checkout, =./scripts/guile-openapi-generator= runs the same command the
+packages install.  The launcher looks for the library beside itself, so it needs
+no environment variable:
+
+#+begin_src shell
+./scripts/guile-openapi-generator generate -i examples/petstore.yaml -o gen
+./scripts/guile-openapi-generator spec -i app/controllers.scm -o openapi.yaml
+#+end_src
+
+** Requirements
+:PROPERTIES:
+:CUSTOM_ID: requirements
+:END:
+
+| Requirement | Version | Needed for                                                 |
+|-------------+---------+------------------------------------------------------------|
+| GNU Guile   |    3.0+ | the generator and everything it generates                  |
+| guile-json  |     4.x | JSON reading and writing, in the generator and at run time |
+| guile-curl  |     0.9 | generated libcurl clients only                             |
+| Artanis     |     1.x | generated Artanis adapters only                            |
+| Veritas     |    0.8+ | this project's tests only                                  |
+| maak        |     any | the developer tasks (=maak test=, =maak check=, …)         |
+
+** Verify the install
+:PROPERTIES:
+:CUSTOM_ID: verify-the-install
+:END:
+
+A successful load prints =ready= and exits quietly:
+
+#+begin_src shell
+guile -L ./src -c '(use-modules (openapi-generator)) (display "ready\n")'
+#+end_src
+
+If that works, you are ready for the quick start.  If it does not, the error
+usually names the missing module or the wrong load path, and the
+[[file:install.org::#requirements][requirements table]] above is the place to look first.
