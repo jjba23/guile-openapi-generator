@@ -288,10 +288,8 @@ still doing too much work.
 :CUSTOM_ID: ai-policy
 :END:
 
-This project follows the
-[[https://jointhefreeworld.org/blog/articles/personal/jointhefreeworld-ai-policy/index.html][jointhefreeworld AI policy]]:
-AI should assist human creativity and problem solving, never replace human
-reasoning. A human stays in the loop for every change.
+This project follows the [[https://jointhefreeworld.org/ai-policy/][jointhefreeworld AI policy]].
+[[file:../AI_POLICY.md][AI_POLICY.md]] holds the short version; the full policy is the link above.
 
 * Licensing
 :PROPERTIES:
