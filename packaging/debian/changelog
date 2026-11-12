@@ -1,3 +1,9 @@
+guile-openapi-generator (0.1.5-1) unstable; urgency=medium
+
+  * Build against the jointhefreeworld collection at v1.0.4.
+
+ -- Josep Bigorra <jjbigorra@gmail.com>  Thu, 12 Nov 2026 15:33:42 +0000
+
 guile-openapi-generator (0.1.0-1) unstable; urgency=medium
 
   * New upstream release.
