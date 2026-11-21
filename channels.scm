@@ -25,7 +25,7 @@
         ;; `guile-dokgen', which `manifest.scm' names, comes from this
         ;; channel, so the Guix revision and the collection are pinned
         ;; together.
-        (commit "139880f859c578974f68d959c956ab25042b7258")
+        (commit "24db897c6c9064ebf2018582c6dca2229dda0e62")
         (introduction
          (make-channel-introduction
           "b0ac3f05075d7959860fc9e1db5871acddea3986"

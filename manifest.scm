@@ -10,6 +10,7 @@
 ;; clients) and the documentation tooling used by `maak docs'.
 
 (use-modules (guix packages)
+             (gnu packages)
              (gnu)
              (guix utils)
              (guix git-download)
@@ -64,6 +65,6 @@ concurrently by default.")
                           ;; `specification->package' finds `guile-dokgen' in
                           ;; the jointhefreeworld channel `channels.scm' pins.
                           (specification->package "guile-dokgen")
-                          texinfo
+                          (specification->package "texinfo")
                           watchexec
                           guile-veritas))
