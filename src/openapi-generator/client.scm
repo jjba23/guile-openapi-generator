@@ -31,6 +31,8 @@
 ;; @code{authenticate} turns an @code{<auth>} into the headers and query
 ;; parameters that express it.
 
+;;; Code:
+
 (define-module (openapi-generator client)
   #:declarative? #t
   #:use-module (ice-9 format)

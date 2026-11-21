@@ -9,6 +9,8 @@
 ;; so the model, controller and client generators can all read it without one of
 ;; them having to depend on the driver that calls them.
 
+;;; Code:
+
 (define-module (openapi-generator config)
   #:declarative? #t
   #:use-module (ice-9 format)

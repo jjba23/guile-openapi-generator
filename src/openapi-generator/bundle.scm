@@ -20,6 +20,8 @@
 ;; document that refers back to one already being bundled gets the local name
 ;; that was reserved for it.
 
+;;; Code:
+
 (define-module (openapi-generator bundle)
   #:declarative? #t
   #:use-module (ice-9 format)

@@ -33,6 +33,8 @@
 ;;                    #:title \"My API\")
 ;; @end example
 
+;;; Code:
+
 (define-module (openapi-generator guile-routes)
   #:declarative? #t
   #:use-module (ice-9 format)

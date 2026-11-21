@@ -16,6 +16,8 @@
 ;; only correct when the caller asks for it, which is why it is a transform and
 ;; not a reader rule.
 
+;;; Code:
+
 (define-module (openapi-generator transforms)
   #:declarative? #t
   #:use-module (srfi srfi-1)

@@ -31,6 +31,8 @@
 ;; comment removed and drives the structural decisions, while @code{raw} keeps
 ;; the original text and is what a block scalar is rebuilt from.
 
+;;; Code:
+
 (define-module (openapi-generator yaml)
   #:declarative? #t
   #:use-module (ice-9 format)

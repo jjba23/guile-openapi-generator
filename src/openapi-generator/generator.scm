@@ -10,6 +10,19 @@
 ;; four generators; this module is the part that knows about directories, module
 ;; names and the report of what was written.
 ;;
+;; The stages, in the order `generate' runs them:
+;;
+;; ```mermaid
+;; flowchart LR
+;;   input["a file, a string<br/>or a document"] --> reader["(openapi-generator reader)<br/>read-document"]
+;;   reader --> bundle["bundle-external-refs<br/>merge-documents"]
+;;   bundle --> validate["validate-document<br/>when #:validate?"]
+;;   validate --> parse["parse-spec"]
+;;   parse --> config["make-config"]
+;;   config --> emit["emit-models<br/>emit-controllers<br/>emit-client"]
+;;   emit --> files["the files written,<br/>reported by generate"]
+;; ```
+;;
 ;; Two options deserve a word:
 ;;
 ;; - @code{#:self-contained?} copies @code{(openapi-generator jso)} and
@@ -18,6 +31,8 @@
 ;;   does not depend on the generator.
 ;; - @code{#:controllers} and @code{#:http} may be @code{'none}, which generates
 ;;   only the models.  A specification is often read for its data shapes alone.
+
+;;; Code:
 
 (define-module (openapi-generator generator)
   #:declarative? #t
@@ -275,7 +290,7 @@ they become procedure names.
 @code{Request} and @code{Response}, each filtered by the direction it describes.
 With one set, @var{exclude-read-only?} and @var{exclude-write-only?} remove the
 matching properties.  @var{x-extensible-enums?} treats
-@code{x-extensible-enum}/{@code{x-extensible-enums} as enumerations, and
+@code{x-extensible-enum}/@code{x-extensible-enums} as enumerations, and
 @var{fault-tolerant-enums?} maps unknown string enumeration values to an
 @code{unrecognized} constant instead of failing validation.
 

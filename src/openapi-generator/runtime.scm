@@ -24,6 +24,8 @@
 ;;   of the specification as literals, and @code{authenticate} turns a
 ;;   @code{<auth>} into the headers and query parameters those schemes require.
 
+;;; Code:
+
 (define-module (openapi-generator runtime)
   #:declarative? #t
   #:use-module (ice-9 format)

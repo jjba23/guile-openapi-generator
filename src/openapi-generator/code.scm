@@ -27,6 +27,8 @@
 ;;
 ;; Nothing here knows what OpenAPI is.  It knows Scheme layout.
 
+;;; Code:
+
 (define-module (openapi-generator code)
   #:declarative? #t
   #:use-module (ice-9 format)

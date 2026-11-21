@@ -61,7 +61,9 @@ concurrently by default.")
                           guile-next
                           guile-json-4
                           guile-curl
-                          guile-documenta
+                          ;; `specification->package' finds `guile-dokgen' in
+                          ;; the jointhefreeworld channel `channels.scm' pins.
+                          (specification->package "guile-dokgen")
                           texinfo
                           watchexec
                           guile-veritas))

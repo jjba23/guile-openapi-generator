@@ -10,7 +10,7 @@
 ;;
 ;; @example
 ;; guile -L src -- \
-;;   -c '((@ (openapi-generator cli) main!)
+;;   -c '((@@ (openapi-generator cli) main!)
 ;;        (list "generate" "--input" "petstore.yaml" "--output" "gen"
 ;;              "--controllers" "artanis" "--http" "curl"))'
 ;; @end example
@@ -25,6 +25,8 @@
 ;; surprise least (plain Guile controllers, plain Guile client, models included),
 ;; and an unknown value is an error rather than a silent fallback: a typo in
 ;; @code{--controllers artanis} should not leave you with a plain Guile server.
+
+;;; Code:
 
 (define-module (openapi-generator cli)
   #:declarative? #t

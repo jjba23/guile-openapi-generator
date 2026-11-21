@@ -17,6 +17,8 @@
 ;; is the difference between generated code that reads like Scheme and generated
 ;; code that reads like a template.
 
+;;; Code:
+
 (define-module (openapi-generator emitter)
   #:declarative? #t
   #:use-module (ice-9 format)

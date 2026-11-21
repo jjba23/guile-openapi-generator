@@ -23,6 +23,8 @@
 ;; construct through @code{yaml-string->scm}, because reading the output back has
 ;; to give the same value, not merely something that looks like YAML.
 
+;;; Code:
+
 (define-module (openapi-generator yaml-writer)
   #:declarative? #t
   #:use-module (ice-9 format)

@@ -9,7 +9,7 @@
 ;;
 ;; A JSON Schema in an OpenAPI document can say "object with these properties"
 ;; in at least five ways: with @code{properties}, with @code{allOf}, with a
-;; @code{$ref} to a named object, with @code{oneOf}/{@code{anyOf} over named
+;; @code{$ref} to a named object, with @code{oneOf}/@code{anyOf} over named
 ;; objects, or with @code{additionalProperties}.  The rest of the generator only
 ;; wants to answer three questions:
 ;;
@@ -24,6 +24,8 @@
 ;; name and an anonymous record type is not something a Scheme programmer could
 ;; refer to.  The @code{<registry>} is what maps a schema node to the name it was
 ;; given.
+
+;;; Code:
 
 (define-module (openapi-generator schema)
   #:declarative? #t
@@ -144,6 +146,13 @@
 (define (enum-shape? shape)
   "Return @code{#t} when @var{shape} is an enumeration."
   (eq? (shape-kind shape) 'enum))
+
+(define (shape-enum? shape)
+  "Return @code{#t} when @var{shape} is an enumeration.
+
+The older spelling of @code{enum-shape?}, kept because it is in this module's
+export list; both answer the same question."
+  (enum-shape? shape))
 
 (define (list-shape? shape)
   "Return @code{#t} when @var{shape} is a list of a single shape."
@@ -658,7 +667,7 @@ decides, because a hierarchy has one discriminator."
               (loop (cdr rest)))))))
 
 (define (shape-from-union document node registry)
-  "Build a @code{oneOf}/{@code{anyOf} shape, discriminated when possible."
+  "Build a @code{oneOf}/@code{anyOf} shape, discriminated when possible."
   (let* ((raw (or (jso-ref node "oneOf") (jso-ref node "anyOf")))
          (branches (map (lambda (branch)
                           (schema-shape document branch #:registry registry))

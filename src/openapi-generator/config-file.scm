@@ -23,6 +23,8 @@
 ;; operation-id-transform: "^V2_(.*)$:v2-\\1"
 ;; @end example
 
+;;; Code:
+
 (define-module (openapi-generator config-file)
   #:declarative? #t
   #:use-module (ice-9 format)

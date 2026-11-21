@@ -16,8 +16,10 @@
 ;; OpenAPI 3.1 understands, @code{const} becomes a one-value enumeration, and
 ;; schema references are rewritten.  Keywords with no OpenAPI equivalent are
 ;; left where they are: the generator ignores what it does not understand, and
-;; inventing a meaning for @code{if}/{@code{then}/{@code{else} or
+;; inventing a meaning for @code{if}/@code{then}/@code{else} or
 ;; @code{patternProperties} would be worse than ignoring them.
+
+;;; Code:
 
 (define-module (openapi-generator json-schema)
   #:declarative? #t

@@ -24,6 +24,8 @@
 ;;   property called @code{else} becomes the field @code{else-field};
 ;; - an identifier that would start with a digit gains an @code{n-} prefix.
 
+;;; Code:
+
 (define-module (openapi-generator naming)
   #:declarative? #t
   #:use-module (ice-9 format)

@@ -35,6 +35,8 @@
 ;; @code{application/merge-patch+json} are two schemas, not one — and a body
 ;; whose schema has no record of its own is decoded by the shape itself.
 
+;;; Code:
+
 (define-module (openapi-generator controllers)
   #:declarative? #t
   #:use-module (ice-9 format)

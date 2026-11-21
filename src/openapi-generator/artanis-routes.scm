@@ -44,6 +44,8 @@
 ;;                    #:title \"My Artanis API\")
 ;; @end example
 
+;;; Code:
+
 (define-module (openapi-generator artanis-routes)
   #:declarative? #t
   #:use-module (ice-9 format)

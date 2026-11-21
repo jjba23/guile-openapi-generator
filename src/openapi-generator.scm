@@ -26,6 +26,8 @@
 ;; turning a schema into a shape, generating only the models — is available from
 ;; the modules below, which are stable enough to be used directly.
 
+;;; Code:
+
 (define-module (openapi-generator)
   #:declarative? #t
   #:use-module (openapi-generator generator)

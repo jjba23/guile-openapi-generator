@@ -31,7 +31,7 @@
 ;;   throws; @code{%make-pet} exists for converters, which fill a record and then
 ;;   validate it once.
 ;; - *Composition is flattened.*  @code{allOf} becomes one record holding the
-;;   union of its members' properties; @code{oneOf}/{@code{anyOf} become a
+;;   union of its members' properties; @code{oneOf}/@code{anyOf} become a
 ;;   predicate plus a decoder that dispatches on the discriminator when the
 ;;   specification declares one.
 ;; - *Enumerations are values, not types.*  A string enumeration is a list of
@@ -52,6 +52,8 @@
 ;; a jso value, @code{box-expression} the form that encodes one, and both take
 ;; their subject as a form as well -- @code{'element}, @code{'(cdr entry)} -- so
 ;; that a caller can nest them without rendering anything.
+
+;;; Code:
 
 (define-module (openapi-generator models)
   #:declarative? #t
@@ -953,7 +955,7 @@ is allowed (@code{additionalProperties: true}), the values are kept as they are.
   "Return @code{#t} when @var{shape} accepts JSON null.
 
 OpenAPI spells that three ways: @code{nullable: true}, @code{type: [T, null]},
-or a @code{null} member of a @code{oneOf}/{@code{anyOf}.}  All three mean the
+or a @code{null} member of a @code{oneOf}/@code{anyOf}.  All three mean the
 same thing to a caller, so a required member may hold @code{#f} for null."
   (or (shape-nullable? shape)
       (and (union-shape? shape)

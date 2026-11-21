@@ -11,6 +11,8 @@
 ;; was found instead.  A Swagger 2.0 document and a JSON Schema file are the two
 ;; mistakes this is meant to catch.
 
+;;; Code:
+
 (define-module (openapi-generator reader)
   #:declarative? #t
   #:use-module (ice-9 format)
@@ -176,7 +178,7 @@ the result is OpenAPI 3.x."
 (define* (read-document source #:key (format #f) (headers '()))
   "Read and parse the YAML/JSON document named by @var{source}.
 
-@var{source} may be a path, an http(s) URL, a file:// URL, @code{"-"} for
+@var{source} may be a path, an http(s) URL, a file:// URL, @code{\"-\"} for
 standard input, or the document text itself.  The result is not validated:
 callers that need an OpenAPI document use @code{read-spec} or call
 @code{validate-document} themselves."
@@ -233,7 +235,7 @@ checked to be OpenAPI 3.x before it is returned."
                     #:validate? validate?))
 
 (define* (read-spec source #:key (format #f) (validate? #t) (headers '()))
-  "Read a specification from @var{source}: a path, an http(s) URL, @code{"-"}
+  "Read a specification from @var{source}: a path, an http(s) URL, @code{\"-\"}
 for standard input, or the document itself.
 
 @var{headers} is sent on a remote fetch."

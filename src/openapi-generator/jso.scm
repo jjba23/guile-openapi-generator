@@ -26,6 +26,8 @@
 ;; from records, so a "<name>->jso" procedure from the generator and a
 ;; hand-written document are the same kind of object.
 
+;;; Code:
+
 (define-module (openapi-generator jso)
   #:declarative? #t
   #:use-module (ice-9 format)

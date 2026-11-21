@@ -36,6 +36,8 @@
 ;; @code{(openapi-generator guile-routes)} reads a plain Guile route table and
 ;; @code{(openapi-generator artanis-routes)} reads Artanis route declarations.
 
+;;; Code:
+
 (define-module (openapi-generator routes)
   #:declarative? #t
   #:use-module (ice-9 format)

@@ -12,12 +12,15 @@
   #:use-module ((maak container) #:prefix ct:)
   #:use-module ((maak git) #:prefix git:)
   #:use-module (ice-9 rdelim)
+  ;; `scandir' names the mermaid sources `maak diagrams' renders.
+  #:use-module (ice-9 ftw)
   #:use-module (srfi srfi-13)
   #:export (test
             check
             generate
             fmt
             docs
+            diagrams
             deploy
             repl
             hot-reload
@@ -123,17 +126,63 @@ never run in the same shell."
        #:verbose? #t))
 
 (define (docs)
-  "Generate technical API documentation."
+  "Generate technical API documentation.
+
+`dokgen' writes the Texinfo chapter and `texi2any' renders it: two calls, so a
+failure names the step that failed instead of an `&&' chain.
+
+`dokgen' writes the chapter to doc/api and draws the mermaid diagrams the
+commentaries carry into doc/api/diagrams.  `texi2any' copies neither a
+stylesheet, a script nor an image into its output, so the HTML goes to
+doc/api-dist and the three are copied beside it afterwards.  The hand-written
+pages under docs/ are Org, and are not part of this build."
   (delete-file-recursively "doc")
-  ;; Documenta writes ./doc/api/index.texi, and texi2any turns that into the
-  ;; HTML tree; two calls, so a failure names the step that failed.
-  (time-machine-manifest-shell (list "documenta" "api"
-                                     (~ "./src/~a" project-name)))
+  ;; The modules live in src/openapi-generator/, and the root module - the
+  ;; re-exporting `(openapi-generator)' - beside it in src/, so both are
+  ;; passed and the server names the modules from src/ in either case.
+  (time-machine-manifest-shell (list "dokgen" "api"
+                                     "--destination" "doc/api"
+                                     (shell-quote
+                                      "./src/openapi-generator ./src/openapi-generator.scm")))
+  (mkdir-p "doc/api-dist")
+  ;; `-I doc/api' is what finds the diagrams beside the chapter, and the head
+  ;; below points the page at the stylesheet and the script `dokgen' writes
+  ;; there.  `--no-split' keeps the reference one page.
   (time-machine-manifest-shell
-   (list "texi2any" "-v" "--html"
+   (list "texi2any" "-v" "--html" "--no-split"
          (~ "--css-ref=~a" api-docs-css-url)
-         "-o" "index_html" "./doc/api/index.texi"))
-  (mv "./index_html" "./doc/api-dist"))
+         "-I" "doc/api"
+         "-c" (shell-quote
+               (string-append
+                "EXTRA_HEAD="
+                "<link rel=\"stylesheet\" href=\"dokgen.css\">"
+                "<script src=\"dokgen.js\" defer></script>"))
+         "-o" "doc/api-dist/index.html"
+         "./doc/api/index.texi"))
+  (for-each (lambda (asset)
+              (when (file-exists? (~ "doc/api/~a" asset))
+                (cp (~ "doc/api/~a" asset) "doc/api-dist"
+                    #:force? #t #:verbose? #t)))
+            '("dokgen.css" "dokgen.js"))
+  (when (file-exists? "doc/api/diagrams")
+    (cp "doc/api/diagrams" "doc/api-dist" #:force? #t #:verbose? #t)))
+
+(define (diagrams)
+  "Render every mermaid source under resources/diagrams to the SVG beside it.
+
+The images are committed, so this runs only when a diagram's source changes;
+the API reference draws the diagrams the commentaries carry during `docs'."
+  (for-each
+   (lambda (name)
+     (let* ((source (in-vicinity "resources/diagrams" name))
+            (image (string-append (string-drop-right source 4) ".svg")))
+       (run (list "mmdc" "-i" source "-o" image
+                  "--backgroundColor" "transparent")
+            #:verbose? #t)))
+   (scandir "resources/diagrams"
+            (lambda (name)
+              (and (not (member name '("." "..")))
+                   (string-suffix? ".mmd" name))))))
 
 (define (deploy)
   "Generate the API documentation and publish it to the web directory."

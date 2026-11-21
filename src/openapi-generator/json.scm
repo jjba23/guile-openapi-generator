@@ -10,6 +10,8 @@
 ;; representation shared with the YAML reader, described in
 ;; @code{(openapi-generator jso)}.
 
+;;; Code:
+
 (define-module (openapi-generator json)
   #:declarative? #t
   #:use-module (json)

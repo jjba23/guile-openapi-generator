@@ -19,6 +19,8 @@
 ;; Interpreting what a schema *means* is deliberately not done here: that is
 ;; @code{(openapi-generator schema)}.
 
+;;; Code:
+
 (define-module (openapi-generator spec)
   #:declarative? #t
   #:use-module (ice-9 format)

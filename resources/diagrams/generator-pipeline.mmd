@@ -1,0 +1,8 @@
+flowchart LR
+  input["a file, a string<br/>or a document"] --> reader["(openapi-generator reader)<br/>read-document"]
+  reader --> bundle["bundle-external-refs<br/>merge-documents"]
+  bundle --> validate["validate-document<br/>when #:validate?"]
+  validate --> parse["parse-spec"]
+  parse --> config["make-config"]
+  config --> emit["emit-models<br/>emit-controllers<br/>emit-client"]
+  emit --> files["the files written,<br/>reported by generate"]
