@@ -11,6 +11,8 @@
 #+attr_html: :width 160 :alt Guile OpenAPI Generator logo
 [[file:logo.svg]]
 
+- 📖 *API reference:* [[https://jointhefreeworld.org/api-docs/guile-openapi-generator/index.html][Guile OpenAPI Generator API reference]]
+
 #+caption: A real =./run.sh demo= run from =examples/todo=.
 #+attr_html: :width 900 :alt Terminal demo: one command generates, serves, calls and stops the Todo API
 [[file:assets/demo.gif]]
