@@ -32,24 +32,24 @@
     ;; body was evaluated while the spec file was loaded, so any body that had
     ;; to start something (the test HTTP server, for instance) ran before the
     ;; runner was in charge and hung the whole suite.
-    (version "0.9.0")
+    (version "1.6.0")
     (source
      (origin
        (method git-fetch)
        (uri (git-reference
-             (url "https://codeberg.org/jjba23/veritas.git")
+             (url "https://github.com/jjba23/veritas.git")
              (commit (string-append "v" version))))
        (file-name (git-file-name name version))
        (sha256
         (base32
-         "1pr8yjnxkrp2fylmn8ihjapin7iz94jqi4hbc6yd0ajll11ajxc9"))))
+         "1lb80y2dks68a2jlr5xix9m8pyqnzwiqiaynbl05p463xxhzs0v7"))))
     (build-system guile-build-system)
     (arguments
      (list
       #:source-directory "src"))
     (native-inputs (list guile-3.0))
     (propagated-inputs (list guile-fibers guile-json-4))
-    (home-page "https://codeberg.org/jjba23/veritas")
+    (home-page "https://github.com/jjba23/veritas")
     (synopsis "Testing framework for Guile")
     (description
      "Veritas is a testing framework for Guile with an @acronym{EDSL,
